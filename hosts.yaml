@@ -4,5 +4,7 @@ azure-hosts:
     devops-vm-1:
       ansible_host: az-devops
 
-    devops-vaggelas:
-      ansible_host:
+azure-hosts-2:
+  hosts:
+    devops-vm-1:
+      ansible_host: 
