@@ -3,6 +3,6 @@ branch: "api"
 appuser: "{{ansible_user_id}}"
 appgroup: "{{ansible_user_gid}}"
 app_port: 3000
-backend_server_url: "http://135.225.48.36:3000"
+backend_server_url: ""
 app:
-  VITE_BACKEND:  http://135.225.48.36
+    VITE_BACKEND:  
