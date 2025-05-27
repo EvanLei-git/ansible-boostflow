@@ -7,12 +7,28 @@
       apt:
         update_cache: yes
 
+    - name: Install git
+      apt:
+        name: git
+        state: present
+        update_cache: yes
+      become: yes
+
+
     - name: Install Node.js and npm
       apt:
         name:
           - nodejs
           - npm
         state: present
+
+    - name: Add Node.js 20 repository and install Node.js
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        apt-get install -y nodejs
+      args:
+        executable: /bin/bash
+      become: yes
 
     - name: Ensure n is installed (Node.js version manager)
       npm:
@@ -30,6 +46,20 @@
         dest: "{{ app_dir }}"
         version: main
       become: false
+
+    - name: Create .env file for Firebase config
+      copy:
+        dest: /home/ubuntu/react-app/.env
+        content: |
+          NEXT_PUBLIC_FIREBASE_API_KEY=AIzaSyBCtUP_65uVdnUjquBzNs3SwrWgtVo6zxg
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=flow-dd81b.firebaseapp.com
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID=flow-dd81b
+          NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=flow-dd81b.firebasestorage.app
+          NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=355622781118
+          NEXT_PUBLIC_FIREBASE_APP_ID=1:355622781118:web:8b923119d0fd0ce1ae5eef
+          NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID=G-8T9KQV6PNF
+      become: false
+
 
     - name: Install React project dependencies
       npm:
