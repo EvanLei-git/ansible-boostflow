@@ -1,0 +1,8 @@
+group_vars/vault.yaml
+*.vault
+.vault_pass.txt
+
+
+# env files 
+.env*
+*.env.*

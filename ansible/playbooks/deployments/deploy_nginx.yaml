@@ -1,0 +1,91 @@
+---
+- name: Deploy Nginx Configuration
+  hosts: azure_hosts
+  become: yes
+  tasks:
+    - name: Ensure Nginx is running
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: restart nginx
+
+    - name: Create Nginx configuration for Next.js app (HTTP)
+      template:
+        src: ../../templates/nginx.nextjs.j2
+        dest: "/etc/nginx/sites-available/{{ app_name }}"
+        backup: yes
+      notify: restart nginx
+      when: not ssl_enabled
+
+    # For SSL, we first create a basic HTTP config to allow Certbot to work
+    - name: Create temporary HTTP configuration for Certbot
+      template:
+        src: ../../templates/nginx.nextjs.j2
+        dest: "/etc/nginx/sites-available/{{ app_name }}"
+        backup: yes
+      notify: restart nginx
+      when: ssl_enabled
+
+    - name: Enable Next.js site
+      file:
+        src: "/etc/nginx/sites-available/{{ app_name }}"
+        dest: "/etc/nginx/sites-enabled/{{ app_name }}"
+        state: link
+      notify: restart nginx
+
+    # Apply changes before running Certbot
+    - name: Restart Nginx to apply configuration
+      systemd:
+        name: nginx
+        state: restarted
+      when: ssl_enabled
+
+    - name: Check SSL certificate validity
+      command: openssl x509 -checkend 2592000 -noout -in /etc/letsencrypt/live/boostflow.me/fullchain.pem
+      register: cert_valid
+      ignore_errors: yes
+      when: ssl_enabled
+
+    - name: Obtain SSL certificate with Certbot
+      command: certbot --nginx -d boostflow.me -d www.boostflow.me --non-interactive --agree-tos --email admin@boostflow.me
+      when: ssl_enabled and (cert_valid.rc != 0 or cert_valid.skipped is defined)
+      register: certbot_result
+
+    # Now apply the full HTTPS configuration after certificates are obtained
+    - name: Create Nginx configuration for Next.js app (HTTPS)
+      template:
+        src: ../../templates/nginx.https.j2
+        dest: "/etc/nginx/sites-available/{{ app_name }}"
+        backup: yes
+      notify: restart nginx
+      when: ssl_enabled
+
+    - name: Test Nginx configuration
+      command: nginx -t
+      register: nginx_test
+      failed_when: nginx_test.rc != 0
+
+    - name: Reload Nginx configuration
+      systemd:
+        name: nginx
+        state: reloaded
+
+    - name: Verify Nginx status
+      command: systemctl is-active nginx
+      register: nginx_status
+
+    - name: Display Nginx deployment status
+      debug:
+        msg: "Nginx deployment completed. Status: {{ nginx_status.stdout }}"
+
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted

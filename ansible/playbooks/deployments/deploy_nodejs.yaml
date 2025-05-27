@@ -1,0 +1,155 @@
+---
+- name: Deploy Next.js Application
+  hosts: azure_hosts
+  become: no
+  vars_files:
+    - ../../group_vars/vault.yaml
+  tasks:
+    - name: Ensure Boostflow directory exists
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+      become: yes
+
+    - name: Ensure .ssh directory exists
+      file:
+        path: "~/.ssh"
+        state: directory
+        mode: '0700'
+
+    - name: Check if local SSH private key exists
+      stat:
+        path: "{{ github_ssh_key_path }}"
+      delegate_to: localhost
+      register: local_ssh_private_key
+
+    - name: Check if local SSH public key exists
+      stat:
+        path: "{{ github_ssh_key_path }}.pub"
+      delegate_to: localhost
+      register: local_ssh_public_key
+
+    - name: Copy GitHub SSH private key from local machine
+      copy:
+        src: "{{ github_ssh_key_path }}"
+        dest: "~/.ssh/id_rsa"
+        mode: '0600'
+      when: local_ssh_private_key.stat.exists
+
+    - name: Copy GitHub SSH public key from local machine
+      copy:
+        src: "{{ github_ssh_key_path }}.pub"
+        dest: "~/.ssh/id_rsa.pub"
+        mode: '0644'
+      when: local_ssh_public_key.stat.exists
+
+    - name: Add GitHub to known_hosts
+      known_hosts:
+        name: github.com
+        key: "{{ lookup('pipe', 'ssh-keyscan -t rsa github.com') }}"
+        state: present
+
+    - name: Clone the Boostflow repository
+      git:
+        repo: "{{ app_repo }}"
+        dest: "{{ app_dir }}"
+        version: "{{ branch }}"
+        force: yes
+        accept_hostkey: yes
+        key_file: "~/.ssh/id_rsa"
+      register: git_result
+      ignore_errors: yes
+      become: no
+
+    - name: Copy .env.local file to application directory
+      copy:
+        src: ../../../.env.local
+        dest: "/home/{{ ansible_user }}/{{ app_name }}/.env.local"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+      become: yes
+
+    - name: Check if package.json exists
+      stat:
+        path: "{{ app_dir }}/package.json"
+      register: package_json
+
+    - name: Clean npm cache and remove node_modules
+      shell: |
+        npm cache clean --force || true
+        rm -rf node_modules package-lock.json || true
+      args:
+        chdir: "{{ app_dir }}"
+      when: package_json.stat.exists
+      become: false
+      ignore_errors: yes
+
+    - name: Stop Kubernetes and Docker services to free resources
+      shell: |
+        systemctl stop kubelet || true
+        systemctl stop containerd || true
+        systemctl stop docker || true
+        docker stop $(docker ps -q) || true
+        sleep 10
+      become: yes
+      ignore_errors: yes
+
+    - name: Install Next.js project dependencies
+      shell: |
+        if [ -f package-lock.json ]; then
+          npm ci --no-audit --no-fund --prefer-offline --silent --progress=false
+        else
+          npm install --no-audit --no-fund --prefer-offline --force --silent --progress=false
+        fi
+      args:
+        chdir: "{{ app_dir }}"
+      environment:
+        NODE_OPTIONS: "--max-old-space-size=2048"
+        NPM_CONFIG_PROGRESS: "false"
+        NPM_CONFIG_LOGLEVEL: "error"
+      register: install_result
+      failed_when: install_result.rc != 0
+
+    - name: Restart Docker and containerd services
+      shell: |
+        systemctl start docker || true
+        systemctl start containerd || true
+        sleep 5
+      become: yes
+      ignore_errors: yes
+
+    - name: Kill any existing Node.js processes
+      shell: |
+        # Kill processes on ports 3000 and 3001
+        lsof -ti:3000 | xargs -r kill -9 || true
+        lsof -ti:3001 | xargs -r kill -9 || true
+        # Kill node processes using ps and grep
+        ps aux | grep -E '(node|npm|next)' | grep -v grep | awk '{print $2}' | xargs -r kill -9 || true
+        # Wait for processes to terminate
+        sleep 3
+      ignore_errors: yes
+      become: yes
+
+    - name: Build Next.js application
+      shell: |
+        export NODE_OPTIONS="--max-old-space-size=2048"
+        timeout 20 npm run build
+      args:
+        chdir: "{{ app_dir }}"
+      when: package_json.stat.exists
+      become: false
+      register: build_result
+      failed_when: build_result.rc != 0 and build_result.rc != 124
+      ignore_errors: yes
+
+    - name: Verify deployment
+      command: node -v
+      register: node_version
+
+    - name: Display deployment status
+      debug:
+        msg: "Node.js deployment completed. Version: {{ node_version.stdout }}"

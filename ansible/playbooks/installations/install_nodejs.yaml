@@ -1,0 +1,57 @@
+---
+- name: Install Node.js
+  hosts: azure_hosts
+  become: yes
+  tasks:
+    - name: Remove problematic azlux repository
+      file:
+        path: "/etc/apt/sources.list.d/azlux.list"
+        state: absent
+      register: repo_removed
+
+    - name: Clean apt cache
+      command: apt-get clean
+      when: repo_removed.changed
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+        update_cache_retries: 5
+        update_cache_retry_max_delay: 120
+
+    - name: Install git
+      apt:
+        name: git
+        state: present
+        update_cache: yes
+
+    - name: Install build essentials
+      apt:
+        name: build-essential
+        state: present
+
+    - name: Add Node.js 20 repository and install Node.js
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        apt-get install -y nodejs
+      args:
+        executable: /bin/bash
+
+    - name: Ensure n is installed (Node.js version manager)
+      npm:
+        name: n
+        global: yes
+
+    - name: Upgrade Node.js to latest LTS version
+      command: n lts
+      environment:
+        PATH: "/usr/local/bin:/usr/bin:/bin"
+
+    - name: Verify Node.js installation
+      command: node -v
+      register: node_version
+
+    - name: Display Node.js version
+      debug:
+        msg: "Node.js version: {{ node_version.stdout }}"

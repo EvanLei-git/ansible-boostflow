@@ -1,8 +1,0 @@
-appdir: "{{ ansible_user_dir }}/boostflow"
-branch: "main"
-appuser: "{{ansible_user_id}}"
-appgroup: "{{ansible_user_gid}}"
-app_port: 3000
-backend_server_url: "http://98.71.16.190:3000"
-app:
-  VITE_BACKEND:  http://98.71.16.190

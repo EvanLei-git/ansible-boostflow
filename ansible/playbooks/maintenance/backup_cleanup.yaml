@@ -1,0 +1,88 @@
+---
+- name: System Maintenance - Backup and Cleanup
+  hosts: azure_hosts
+  become: yes
+  tasks:
+    - name: Create backup directory
+      file:
+        path: "/home/{{ ansible_user }}/backups"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Backup Nginx configurations
+      archive:
+        path:
+          - /etc/nginx/sites-available
+          - /etc/nginx/sites-enabled
+          - /etc/nginx/nginx.conf
+        dest: "/home/{{ ansible_user }}/backups/nginx-config-{{ ansible_date_time.date }}.tar.gz"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+      when: backup_nginx | default(true)
+
+    - name: Backup SSL certificates
+      archive:
+        path: /etc/letsencrypt
+        dest: "/home/{{ ansible_user }}/backups/ssl-certs-{{ ansible_date_time.date }}.tar.gz"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+      when: backup_ssl | default(true) and ssl_enabled
+      ignore_errors: yes
+
+    - name: Backup application data
+      archive:
+        path: "{{ app_dir }}"
+        dest: "/home/{{ ansible_user }}/backups/app-data-{{ ansible_date_time.date }}.tar.gz"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        exclude_path:
+          - "{{ app_dir }}/node_modules"
+          - "{{ app_dir }}/.next"
+          - "{{ app_dir }}/.git"
+      when: backup_app | default(true)
+      ignore_errors: yes
+
+    - name: Clean old log files
+      find:
+        paths:
+          - /var/log
+          - /var/log/nginx
+        age: "30d"
+        patterns: "*.log*"
+      register: old_logs
+      when: cleanup_logs | default(false)
+
+    - name: Remove old log files
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ old_logs.files }}"
+      when: cleanup_logs | default(false) and old_logs.files is defined
+
+    - name: Clean old backups (keep last 7 days)
+      find:
+        paths: "/home/{{ ansible_user }}/backups"
+        age: "7d"
+        patterns: "*.tar.gz"
+      register: old_backups
+      when: cleanup_old_backups | default(true)
+
+    - name: Remove old backup files
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ old_backups.files }}"
+      when: cleanup_old_backups | default(true) and old_backups.files is defined
+
+    - name: Clean temporary files
+      shell: |
+        find /tmp -type f -atime +7 -delete || true
+        find /var/tmp -type f -atime +7 -delete || true
+      when: cleanup_temp | default(false)
+      ignore_errors: yes
+
+    - name: Display cleanup summary
+      debug:
+        msg: "Backup and cleanup completed. Check /home/{{ ansible_user }}/backups for backup files."

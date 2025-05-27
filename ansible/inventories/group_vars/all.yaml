@@ -1,0 +1,26 @@
+
+# Global defaults
+ansible_python_interpreter: /usr/bin/python3
+
+# Application settings
+app_name: "Boostflow"
+app_repo: "git@github.com:Kdim67/BoostFlow.git"
+app_port: 3000
+branch: "main"
+app_dir: "/opt/boostflow"
+app_user: "boostflow"
+app_group: "boostflow"
+
+# Web server settings
+nginx_port: 80
+ssl_enabled: false
+
+# Environment Configuration
+node_env: "production"
+
+# SSH Key settings
+# Default paths for SSH keys - override in host_vars if needed
+github_ssh_key_path: "~/.ssh/id_rsa"
+
+# vars_files:
+#   - vault.yaml

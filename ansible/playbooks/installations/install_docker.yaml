@@ -1,51 +1,54 @@
 ---
-- hosts: all
-
+- name: Install Docker
+  hosts: azure_hosts
+  become: yes
   tasks:
     - name: Install basic packages
       apt:
         name: "{{item}}"
         state: present
         update_cache: true
+        update_cache_retries: 5
+        update_cache_retry_max_delay: 120
       loop:
         - software-properties-common
         - curl
         - apt-transport-https
         - ca-certificates
-      become: yes
 
-    - name: get key
+    - name: Get Docker GPG key
       shell: "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -"
-      #ignore_errors: yes
-      become: yes
 
-    - name: Add docker ppa
+    - name: Add Docker repository
       apt_repository:
         repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable
         state: present
         update_cache: yes
-      become: yes
+      register: docker_repo_added
 
-    - name: install docker
+    - name: Clean apt cache after adding Docker repository
+      command: apt-get clean
+      when: docker_repo_added.changed
+
+    - name: Install Docker
       apt:
         name: "{{item}}"
         state: present
         update_cache: true
+        update_cache_retries: 5
+        update_cache_retry_max_delay: 120
       loop:
         - docker-ce
         - docker-compose
-      become: yes
 
-    - name: start docker service
+    - name: Start Docker service
       service:
         name: docker
         state: started
         enabled: true
-      become: yes
 
-    - name: adding existing user to group docker
+    - name: Add user to docker group
       user:
-        name: "{{  ansible_user_id }}"
+        name: "{{ ansible_user }}"
         groups: docker
         append: yes
-      become: yes

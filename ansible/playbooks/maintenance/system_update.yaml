@@ -1,0 +1,57 @@
+---
+- name: System Maintenance - Updates
+  hosts: azure_hosts
+  become: yes
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+        autoremove: yes
+        autoclean: yes
+      when: ansible_os_family == "Debian"
+      register: upgrade_result
+
+    - name: Check if reboot is required
+      stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Display upgrade results
+      debug:
+        msg: "System upgrade completed. Reboot required: {{ reboot_required.stat.exists }}"
+
+    - name: Update Node.js to latest LTS
+      command: n lts
+      environment:
+        PATH: "/usr/local/bin:/usr/bin:/bin"
+      when: update_nodejs | default(false)
+      ignore_errors: yes
+
+    - name: Update npm to latest version
+      npm:
+        name: npm
+        global: yes
+        state: latest
+      when: update_nodejs | default(false)
+      ignore_errors: yes
+
+    - name: Clean npm cache
+      command: npm cache clean --force
+      when: update_nodejs | default(false)
+      ignore_errors: yes
+
+    - name: Update Docker images
+      shell: docker images --format "table {{.Repository}}:{{.Tag}}" | grep -v REPOSITORY | xargs -I {} docker pull {}
+      when: update_docker_images | default(false)
+      ignore_errors: yes
+
+    - name: Clean up unused Docker resources
+      command: docker system prune -af
+      when: cleanup_docker | default(false)
+      ignore_errors: yes

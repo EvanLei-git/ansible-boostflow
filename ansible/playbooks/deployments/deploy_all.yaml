@@ -1,0 +1,10 @@
+---
+# Master deployment playbook - Application deployment
+# Run this to deploy applications after infrastructure is set up
+
+
+- name: Deploy Nginx Configuration
+  import_playbook: deploy_nginx.yaml
+
+- name: Deploy Docker Services
+  import_playbook: deploy_docker.yaml

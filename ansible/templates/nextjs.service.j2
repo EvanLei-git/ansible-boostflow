@@ -1,0 +1,17 @@
+[Unit]
+Description={{ app_name }} Next.js Application
+After=network.target
+
+[Service]
+Type=simple
+User={{ app_user }}
+Group={{ app_group }}
+WorkingDirectory={{ app_dir }}
+Environment=NODE_ENV={{ node_env }}
+Environment=PORT={{ app_port }}
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

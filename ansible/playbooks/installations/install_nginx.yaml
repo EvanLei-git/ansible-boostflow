@@ -1,0 +1,111 @@
+- name: Install and configure Nginx for Next.js
+  hosts: azure_hosts
+  become: yes
+  tasks:
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+        update_cache: yes
+        update_cache_retries: 5
+        update_cache_retry_max_delay: 120
+      when: ansible_os_family == "Debian"
+
+    - name: Install Certbot and Nginx plugin
+      apt:
+        name:
+          - certbot
+          - python3-certbot-nginx
+        state: present
+        update_cache: yes
+        update_cache_retries: 5
+        update_cache_retry_max_delay: 120
+      when: ansible_os_family == "Debian" and ssl_enabled
+
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: restart nginx
+
+    - name: Create Nginx configuration for Next.js app (HTTP)
+      template:
+        src: ../../templates/nginx.nextjs.j2
+        dest: "/etc/nginx/sites-available/{{ app_name }}"
+        backup: yes
+      notify: restart nginx
+      when: not ssl_enabled
+
+    # For SSL, we first create a basic HTTP config to allow Certbot to work
+    - name: Create temporary HTTP configuration for Certbot
+      template:
+        src: ../../templates/nginx.nextjs.j2
+        dest: "/etc/nginx/sites-available/{{ app_name }}"
+        backup: yes
+      notify: restart nginx
+      when: ssl_enabled
+
+    - name: Enable Next.js site
+      file:
+        src: "/etc/nginx/sites-available/{{ app_name }}"
+        dest: "/etc/nginx/sites-enabled/{{ app_name }}"
+        state: link
+      notify: restart nginx
+
+    # Apply changes before running Certbot
+    - name: Restart Nginx to apply configuration
+      systemd:
+        name: nginx
+        state: restarted
+      when: ssl_enabled
+
+    - name: Check SSL certificate validity
+      command: openssl x509 -checkend 2592000 -noout -in /etc/letsencrypt/live/boostflow.me/fullchain.pem
+      register: cert_valid
+      ignore_errors: yes
+      when: ssl_enabled
+
+    - name: Obtain SSL certificate with Certbot
+      command: certbot --nginx -d boostflow.me -d www.boostflow.me --non-interactive --agree-tos --email admin@boostflow.me
+      when: ssl_enabled and (cert_valid.rc != 0 or cert_valid.skipped is defined)
+      register: certbot_result
+
+    # Now apply the full HTTPS configuration after certificates are obtained
+    - name: Create Nginx configuration for Next.js app (HTTPS)
+      template:
+        src: ../../templates/nginx.https.j2
+        dest: "/etc/nginx/sites-available/{{ app_name }}"
+        backup: yes
+      notify: restart nginx
+      when: ssl_enabled
+
+    - name: Test Nginx configuration
+      command: nginx -t
+      register: nginx_test
+      failed_when: nginx_test.rc != 0
+
+    - name: Start and enable Nginx
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+        
+    - name: Allow HTTP traffic through firewall
+      ufw:
+        rule: allow
+        port: '80'
+        proto: tcp
+      when: ansible_os_family == "Debian"
+      
+    - name: Allow HTTPS traffic through firewall
+      ufw:
+        rule: allow
+        port: '443'
+        proto: tcp
+      when: ansible_os_family == "Debian" and ssl_enabled
+
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted

@@ -1,0 +1,101 @@
+---
+- name: Deploy Docker Services
+  hosts: azure_hosts
+  become: no
+  vars_files:
+    - ../../group_vars/vault.yaml
+  tasks:
+    - name: Ensure Boostflow directory exists
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+      become: yes
+
+    - name: Ensure .ssh directory exists
+      file:
+        path: "~/.ssh"
+        state: directory
+        mode: '0700'
+
+    - name: Check if local SSH private key exists
+      stat:
+        path: "{{ github_ssh_key_path }}"
+      delegate_to: localhost
+      register: local_ssh_private_key
+
+    - name: Check if local SSH public key exists
+      stat:
+        path: "{{ github_ssh_key_path }}.pub"
+      delegate_to: localhost
+      register: local_ssh_public_key
+
+    - name: Copy GitHub SSH private key from local machine
+      copy:
+        src: "{{ github_ssh_key_path }}"
+        dest: "~/.ssh/id_rsa"
+        mode: '0600'
+      when: local_ssh_private_key.stat.exists
+
+    - name: Copy GitHub SSH public key from local machine
+      copy:
+        src: "{{ github_ssh_key_path }}.pub"
+        dest: "~/.ssh/id_rsa.pub"
+        mode: '0644'
+      when: local_ssh_public_key.stat.exists
+
+    - name: Add GitHub to known_hosts
+      known_hosts:
+        name: github.com
+        key: "{{ lookup('pipe', 'ssh-keyscan -t rsa github.com') }}"
+        state: present
+
+    - name: Clone the Boostflow repository
+      git:
+        repo: "{{ app_repo }}"
+        dest: "{{ app_dir }}"
+        version: "{{ branch }}"
+        force: yes
+        accept_hostkey: yes
+        key_file: "~/.ssh/id_rsa"
+      register: git_result
+      ignore_errors: yes
+      become: no
+
+    - name: Copy .env.local file to application directory
+      copy:
+        src: ../../../.env.local
+        dest: "{{ app_dir }}/.env.local"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+      become: yes
+
+    - name: Stop existing Docker Compose services
+      shell: docker compose down
+      args:
+        chdir: "{{ app_dir }}"
+      ignore_errors: yes
+      become: yes
+
+    - name: Start Docker Compose services
+      shell: docker compose up -d --build
+      args:
+        chdir: "{{ app_dir }}"
+      become: yes
+      when: docker_action | default('start') == 'start'
+
+    - name: Show running containers
+      shell: docker compose ps
+      args:
+        chdir: "{{ app_dir }}"
+      register: docker_status
+      become: yes
+      when: docker_action | default('start') == 'start'
+
+    - name: Display Docker status
+      debug:
+        var: docker_status.stdout_lines
+      when: docker_action | default('start') == 'start' and docker_status is defined

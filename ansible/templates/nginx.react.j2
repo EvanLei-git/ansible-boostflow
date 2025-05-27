@@ -5,7 +5,7 @@ server {
     server_name boostflow.me www.boostflow.me;
 
     location / {
-        root /var/www/vue;
+        root {{ app_dir }};
         try_files $uri $uri/ /index.html;
     }
 

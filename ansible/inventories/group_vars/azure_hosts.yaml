@@ -1,0 +1,14 @@
+# Explicitly define user directory to avoid path resolution issues
+ansible_user_dir: "/home/azureuser"
+
+appdir: "{{ ansible_user_dir }}/Boostflow"
+appuser: "{{ ansible_user_id }}"
+appgroup: "{{ ansible_user_gid }}"
+app:
+  VITE_BACKEND: "http://boostflow.me"
+backend_server_url: "http://boostflow.me"
+
+# Might not need these...
+app_user: "{{ ansible_user_id }}"
+app_group: "{{ ansible_user_gid }}"
+app_dir: "{{ ansible_user_dir }}/Boostflow"
