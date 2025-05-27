@@ -1,0 +1,69 @@
+---
+- hosts: azure-hosts
+
+  vars:
+      appdir: "{{ ansible_user_dir }}/react"
+      branch: "main"
+      site_location: /var/www/react
+
+  pre_tasks:
+
+    - name: Find my public ip
+      uri:
+        url: http://ifconfig.me/ip
+        return_content: yes
+      register: ip_response
+
+    - name: See public ip
+      debug:
+        var: ip_response.content
+
+    - name: Install Nginx
+      package:
+        name: nginx
+        state: latest
+      become: yes
+
+    - name: Install Node.js 20.x and npm
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        apt-get install -y nodejs
+      args:
+        executable: /bin/bash
+      become: yes
+
+    - name: "debug"
+      ansible.builtin.debug:
+        msg: "PATH : {{ ansible_env.PATH }}"
+
+    - name: Install Git
+      package:
+        name: git
+        state: latest
+      become: yes
+
+    - name: copy env file
+      shell : "cp {{frontendappdir}}/.env.example {{frontendappdir}}/.env"
+
+    - name: populate  ~/.env
+      lineinfile:
+        dest: "{{frontendappdir}}/.env"
+        state: present
+        regexp: "^{{item.key}}="
+        line: "{{item.key}}='{{item.value}}'"
+      with_items:
+        - "{{app | dict2items}}"
+
+    - name: de-activate default nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      become: yes
+      notify: restart nginx
+
+  handlers:
+    - name: restart nginx
+      service:
+        name: nginx
+        state: restarted
+      become: yes
