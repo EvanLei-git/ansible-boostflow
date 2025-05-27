@@ -2,9 +2,7 @@
 azure-hosts:
   hosts:
     devops-vm-1:
-      ansible_host: az-devops
-
-azure-hosts-2:
-  hosts:
-    devops-vm-1:
       ansible_host: 
+        HostName 98.71.16.190
+        User azureuser
+        IdentityFile .\.ssh\id_boostflow
