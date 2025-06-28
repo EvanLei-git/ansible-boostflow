@@ -9,6 +9,7 @@ Group={{ app_group }}
 WorkingDirectory={{ app_dir }}
 Environment=NODE_ENV={{ node_env }}
 Environment=PORT={{ app_port }}
+EnvironmentFile={{ app_dir }}/.env.local
 ExecStart=/usr/bin/npm start
 Restart=always
 RestartSec=10

@@ -150,6 +150,42 @@
       command: node -v
       register: node_version
 
+    - name: Deploy Next.js systemd service
+      template:
+        src: ../../templates/nextjs.service.j2
+        dest: "/etc/systemd/system/{{ app_name }}.service"
+        owner: root
+        group: root
+        mode: '0644'
+      become: yes
+      notify: restart nextjs
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+      become: yes
+
+    - name: Enable and start Next.js service
+      systemd:
+        name: "{{ app_name }}.service"
+        enabled: yes
+        state: started
+      become: yes
+
+    - name: Wait for Next.js service to be ready
+      wait_for:
+        port: "{{ app_port }}"
+        host: localhost
+        delay: 5
+        timeout: 60
+
     - name: Display deployment status
       debug:
-        msg: "Node.js deployment completed. Version: {{ node_version.stdout }}"
+        msg: "Node.js deployment completed. Version: {{ node_version.stdout }}. Service: {{ app_name }} is running on port {{ app_port }}"
+
+  handlers:
+    - name: restart nextjs
+      systemd:
+        name: "{{ app_name }}.service"
+        state: restarted
+      become: yes

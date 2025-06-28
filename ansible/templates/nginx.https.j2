@@ -19,6 +19,20 @@ server {
     ssl_stapling on;
     ssl_stapling_verify on;
 
+    # Firebase Auth Action Handler - specific route for email verification
+    location /auth-handler/auth/action {
+        proxy_pass {% if ansible_virtualization_type is defined and ansible_virtualization_type == 'docker' %}http://boostflow-app:{{ app_port }}{% else %}http://localhost:{{ app_port }}{% endif %};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        proxy_read_timeout 86400;
+    }
+
     location / {
         proxy_pass {% if ansible_virtualization_type is defined and ansible_virtualization_type == 'docker' %}http://boostflow-app:{{ app_port }}{% else %}http://localhost:{{ app_port }}{% endif %};
         proxy_http_version 1.1;
