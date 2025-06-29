@@ -13,7 +13,7 @@ app_group: "boostflow"
 
 # Web server settings
 nginx_port: 80
-ssl_enabled: false
+ssl_enabled: true
 
 # Environment Configuration
 node_env: "production"
@@ -21,6 +21,4 @@ node_env: "production"
 # SSH Key settings
 # Default paths for SSH keys - override in host_vars if needed
 github_ssh_key_path: "~/.ssh/id_rsa"
-
-# vars_files:
-#   - vault.yaml
+github_ssh_public_key_path: "~/.ssh/id_rsa.pub"

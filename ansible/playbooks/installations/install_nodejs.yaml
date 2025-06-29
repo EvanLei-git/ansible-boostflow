@@ -3,22 +3,13 @@
   hosts: azure_hosts
   become: yes
   tasks:
-    - name: Remove problematic azlux repository
-      file:
-        path: "/etc/apt/sources.list.d/azlux.list"
-        state: absent
-      register: repo_removed
-
-    - name: Clean apt cache
-      command: apt-get clean
-      when: repo_removed.changed
 
     - name: Update apt cache
       apt:
         update_cache: yes
         cache_valid_time: 3600
         update_cache_retries: 5
-        update_cache_retry_max_delay: 120
+        update_cache_retry_max_delay: 10
 
     - name: Install git
       apt:

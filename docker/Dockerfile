@@ -19,15 +19,9 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies (including dev deps needed for build)
-# Add retry logic for network issues and clean cache
-RUN npm cache clean --force && \
-    npm config set registry https://registry.npmjs.org/ && \
-    npm config set fetch-retry-mintimeout 20000 && \
-    npm config set fetch-retry-maxtimeout 120000 && \
-    npm config set fetch-retries 5 && \
-    npm config set prefer-offline true && \
-    npm config set audit false && \
-    npm ci --silent --no-optional
+RUN npm install
+
+RUN npm ci
 
 # Copy source code
 COPY . .

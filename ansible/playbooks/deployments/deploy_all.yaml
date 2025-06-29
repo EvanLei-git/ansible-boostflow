@@ -2,9 +2,15 @@
 # Master deployment playbook - Application deployment
 # Run this to deploy applications after infrastructure is set up
 
-
+# Deploy Nginx Configuration last (configures reverse proxy for running services)
 - name: Deploy Nginx Configuration
   import_playbook: deploy_nginx.yaml
 
+# Deploy Docker Services first (if using Docker deployment)
 - name: Deploy Docker Services
   import_playbook: deploy_docker.yaml
+
+# Deploy Node.js Application (alternative to Docker deployment)
+#- name: Deploy Node.js Application
+#  import_playbook: deploy_nodejs.yaml
+

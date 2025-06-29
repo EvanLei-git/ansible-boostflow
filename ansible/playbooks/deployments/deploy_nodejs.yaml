@@ -9,60 +9,56 @@
       file:
         path: "{{ app_dir }}"
         state: directory
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
         mode: '0755'
       become: yes
 
-    - name: Ensure .ssh directory exists
+    - name: Ensure SSH directory exists
       file:
-        path: "~/.ssh"
+        path: "/home/{{ ansible_user }}/.ssh"
         state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
         mode: '0700'
+      become: yes
 
-    - name: Check if local SSH private key exists
-      stat:
-        path: "{{ github_ssh_key_path }}"
-      delegate_to: localhost
-      register: local_ssh_private_key
-
-    - name: Check if local SSH public key exists
-      stat:
-        path: "{{ github_ssh_key_path }}.pub"
-      delegate_to: localhost
-      register: local_ssh_public_key
-
-    - name: Copy GitHub SSH private key from local machine
+    - name: Copy SSH private key to remote host
       copy:
         src: "{{ github_ssh_key_path }}"
-        dest: "~/.ssh/id_rsa"
+        dest: "/home/{{ ansible_user }}/.ssh/id_rsa"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
         mode: '0600'
-      when: local_ssh_private_key.stat.exists
+      become: yes
 
-    - name: Copy GitHub SSH public key from local machine
+    - name: Copy SSH public key to remote host
       copy:
-        src: "{{ github_ssh_key_path }}.pub"
-        dest: "~/.ssh/id_rsa.pub"
+        src: "{{ github_ssh_public_key_path }}"
+        dest: "/home/{{ ansible_user }}/.ssh/id_rsa.pub"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
         mode: '0644'
-      when: local_ssh_public_key.stat.exists
+      become: yes
 
     - name: Add GitHub to known_hosts
       known_hosts:
         name: github.com
-        key: "{{ lookup('pipe', 'ssh-keyscan -t rsa github.com') }}"
-        state: present
+        key: "{{ lookup('pipe', 'ssh-keyscan -H github.com') }}"
+        path: "/home/{{ ansible_user }}/.ssh/known_hosts"
+      become_user: "{{ ansible_user }}"
+      become: yes
 
-    - name: Clone the Boostflow repository
+    - name: Clone Boostflow repository
       git:
         repo: "{{ app_repo }}"
         dest: "{{ app_dir }}"
         version: "{{ branch }}"
         force: yes
+        key_file: "/home/{{ ansible_user }}/.ssh/id_rsa"
         accept_hostkey: yes
-        key_file: "~/.ssh/id_rsa"
-      register: git_result
-      ignore_errors: yes
-      become: no
+      become_user: "{{ ansible_user }}"
+      become: yes
 
     - name: Copy .env.local file to application directory
       copy:
@@ -88,15 +84,7 @@
       become: false
       ignore_errors: yes
 
-    - name: Stop Kubernetes and Docker services to free resources
-      shell: |
-        systemctl stop kubelet || true
-        systemctl stop containerd || true
-        systemctl stop docker || true
-        docker stop $(docker ps -q) || true
-        sleep 10
-      become: yes
-      ignore_errors: yes
+    # Removed Docker service stopping as it conflicts with Docker deployment
 
     - name: Install Next.js project dependencies
       shell: |
@@ -114,13 +102,7 @@
       register: install_result
       failed_when: install_result.rc != 0
 
-    - name: Restart Docker and containerd services
-      shell: |
-        systemctl start docker || true
-        systemctl start containerd || true
-        sleep 5
-      become: yes
-      ignore_errors: yes
+    # Removed Docker service restart as it's handled by installation playbooks
 
     - name: Kill any existing Node.js processes
       shell: |

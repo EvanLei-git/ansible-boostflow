@@ -2,11 +2,14 @@
 # Master installation playbook - Infrastructure setup
 # Run this once to set up the complete infrastructure
 
-- name: Install Docker
-  import_playbook: install_docker.yaml
-
+# Install Node.js first (required for npm operations)
 - name: Install Node.js
   import_playbook: install_nodejs.yaml
 
+# Install Docker second (required for Docker deployments)
+- name: Install Docker
+  import_playbook: install_docker.yaml
+
+# Install Nginx last
 - name: Install Nginx
   import_playbook: install_nginx.yaml

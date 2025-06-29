@@ -9,7 +9,7 @@
         state: present
         update_cache: true
         update_cache_retries: 5
-        update_cache_retry_max_delay: 120
+        update_cache_retry_max_delay: 10
       loop:
         - software-properties-common
         - curl
@@ -36,7 +36,7 @@
         state: present
         update_cache: true
         update_cache_retries: 5
-        update_cache_retry_max_delay: 120
+        update_cache_retry_max_delay: 10
       loop:
         - docker-ce
         - docker-compose

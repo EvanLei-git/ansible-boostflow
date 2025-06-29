@@ -103,7 +103,7 @@
         port: '443'
         proto: tcp
       when: ansible_os_family == "Debian" and ssl_enabled
-
+        
   handlers:
     - name: restart nginx
       systemd:
