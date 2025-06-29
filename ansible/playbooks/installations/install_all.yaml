@@ -4,16 +4,9 @@
 
 - name: Install Docker
   import_playbook: install_docker.yaml
-  when: install_docker | default(true)
 
 - name: Install Node.js
   import_playbook: install_nodejs.yaml
-  when: install_nodejs | default(true)
 
 - name: Install Nginx
   import_playbook: install_nginx.yaml
-  when: install_nginx | default(true)
-
-- name: Install Kubernetes
-  import_playbook: install_kubernetes.yaml
-  when: install_kubernetes | default(false)
