@@ -1,5 +1,4 @@
----
-# Install Docker for Kubernetes
+# Install Docker for general use
 - name: Update apt cache
   apt:
     update_cache: yes
@@ -40,21 +39,9 @@
       - docker-compose-plugin
     state: present
 
-- name: Configure containerd for Kubernetes
-  shell: |
-    containerd config default | sudo tee /etc/containerd/config.toml
-    sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-  notify: restart containerd
-
 - name: Start and enable Docker
   systemd:
     name: docker
-    state: started
-    enabled: yes
-
-- name: Start and enable containerd
-  systemd:
-    name: containerd
     state: started
     enabled: yes
 
@@ -63,17 +50,3 @@
     name: azureuser
     groups: docker
     append: yes
-
-- name: Create Docker daemon configuration
-  copy:
-    content: |
-      {
-        "exec-opts": ["native.cgroupdriver=systemd"],
-        "log-driver": "json-file",
-        "log-opts": {
-          "max-size": "100m"
-        },
-        "storage-driver": "overlay2"
-      }
-    dest: /etc/docker/daemon.json
-  notify: restart docker

@@ -1,0 +1,194 @@
+---
+# Complete 3-VM Infrastructure Setup
+# This playbook sets up the entire infrastructure for the DevOps assignment
+
+# VM1: Jenkins + Ansible Controller Setup
+- name: Setup Jenkins and Ansible Controller (VM1)
+  hosts: vag-setup-vm
+  become: yes
+  tasks:
+    - name: Update system packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - curl
+          - wget
+          - git
+          - python3
+          - python3-pip
+          - software-properties-common
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Install Docker
+      include_tasks: ../tasks/install_docker.yaml
+
+    - name: Install Jenkins
+      include_tasks: ../tasks/install_jenkins.yaml
+
+    - name: Install Ansible
+      apt:
+        name: ansible
+        state: present
+
+    - name: Create Jenkins workspace directory
+      file:
+        path: /var/lib/jenkins/workspace
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: '0755'
+
+    # - name: Clone ansible-boostflow repository for Jenkins
+    #   git:
+    #     repo: "https://github.com/EvanLei-git/ansible-boostflow.git"
+    #     dest: /var/lib/jenkins/workspace/ansible-boostflow
+    #     version: fast
+    #   become: yes
+    #   become_user: jenkins
+    #   become_method: sudo
+    #   vars:
+    #     ansible_common_remote_group: jenkins
+
+    - name: Set up SSH keys for Jenkins
+      file:
+        path: /var/lib/jenkins/.ssh
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: '0700'
+
+
+# VM2: Production Application Server Setup
+- name: Setup Production Application Server (VM2)
+  hosts: vag-prod-vm
+  become: yes
+  vars:
+    app_user: "boostflow"
+    app_group: "boostflow"
+    app_dir: "/opt/boostflow"
+    app_name: "boostflow"
+  tasks:
+    - name: Update system packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+        cache_valid_time: 3600
+
+    - name: Install Docker
+      include_tasks: ../tasks/install_docker.yaml
+
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+        update_cache: yes
+
+    - name: Create application group
+      group:
+        name: "{{ app_group }}"
+        state: present
+
+    - name: Create application user
+      user:
+        name: "{{ app_user }}"
+        group: "{{ app_group }}"
+        shell: /bin/bash
+        home: "/home/{{ app_user }}"
+        create_home: yes
+
+    - name: Create application directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: '0755'
+
+    - name: Configure Nginx for NextJS
+      template:
+        src: ../templates/nginx.nextjs.j2
+        dest: /etc/nginx/sites-available/nextjs
+        backup: yes
+      notify: restart nginx
+
+    - name: Enable NextJS site
+      file:
+        src: /etc/nginx/sites-available/nextjs
+        dest: /etc/nginx/sites-enabled/nextjs
+        state: link
+      notify: restart nginx
+
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: restart nginx
+
+# VM3: MinIO Storage Server Setup
+- name: Setup MinIO Storage Server (VM3)
+  hosts: vag-minio-vm
+  become: yes
+  tasks:
+    - name: Update system packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+        cache_valid_time: 3600
+
+    - name: Install Docker
+      include_tasks: ../tasks/install_docker.yaml
+
+    - name: Create MinIO directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+      loop:
+        - /opt/minio
+        - /opt/minio/data
+        - /opt/minio/config
+
+    - name: Configure firewall for MinIO ports
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop:
+        - '9000'
+        - '9001'
+      when: ansible_os_family == "Debian"
+
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+        enabled: yes
+
+# Final verification
+- name: Verify Infrastructure Setup
+  hosts: all
+  tasks:
+    - name: Check Docker status
+      systemd:
+        name: docker
+        state: started
+      register: docker_status
+
+    - name: Display setup completion
+      debug:
+        msg:
+          - "Infrastructure setup completed for {{ inventory_hostname }}"
+          - "Docker status: {{ docker_status.status.ActiveState }}"
+          - "Ready for application deployment"

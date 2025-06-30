@@ -7,7 +7,7 @@
 
 - name: Install Java (required for Jenkins)
   apt:
-    name: openjdk-11-jdk
+    name: openjdk-17-jdk
     state: present
 
 - name: Add Jenkins GPG key
@@ -31,47 +31,32 @@
     name: jenkins
     state: present
 
-- name: Start and enable Jenkins
-  systemd:
-    name: jenkins
-    state: started
-    enabled: yes
-
 - name: Add jenkins user to docker group
   user:
     name: jenkins
     groups: docker
     append: yes
 
-- name: Install kubectl for Jenkins
-  shell: |
-    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-    chmod +x kubectl
-    mv kubectl /usr/local/bin/
-  args:
-    creates: /usr/local/bin/kubectl
+- name: Start and enable Jenkins
+  systemd:
+    name: jenkins
+    state: started
+    enabled: yes
 
-- name: Copy kubeconfig for Jenkins
-  copy:
-    src: /home/azureuser/.kube/config
-    dest: /var/lib/jenkins/.kube/config
-    owner: jenkins
-    group: jenkins
-    mode: '0600'
-    remote_src: yes
 
-- name: Create Jenkins .kube directory
-  file:
-    path: /var/lib/jenkins/.kube
-    state: directory
-    owner: jenkins
-    group: jenkins
-    mode: '0755'
 
 - name: Install Ansible for Jenkins
   apt:
     name: ansible
     state: present
+
+- name: Create Jenkins .ssh directory
+  file:
+    path: /var/lib/jenkins/.ssh
+    state: directory
+    owner: jenkins
+    group: jenkins
+    mode: '0700'
 
 - name: Copy SSH keys for Jenkins
   copy:
@@ -86,19 +71,13 @@
     - id_boostflow.pub
     - known_hosts
 
-- name: Create Jenkins .ssh directory
-  file:
-    path: /var/lib/jenkins/.ssh
-    state: directory
-    owner: jenkins
-    group: jenkins
-    mode: '0700'
-
 - name: Get Jenkins initial admin password
   shell: cat /var/lib/jenkins/secrets/initialAdminPassword
   register: jenkins_password
   changed_when: false
+  when: false 
 
 - name: Display Jenkins initial password
   debug:
     msg: "Jenkins initial admin password: {{ jenkins_password.stdout }}"
+  when: false 

@@ -1,0 +1,72 @@
+---
+# MinIO-only deployment playbook for VM3 (vag-minio-vm)
+# This playbook deploys only MinIO storage service
+
+- name: Deploy MinIO Storage Service
+  hosts: vag-minio-vm
+  become: yes
+  vars:
+    deployment_env: "{{ deployment_env | default('production') }}"
+    
+  tasks:
+    - name: Create MinIO directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+      loop:
+        - "{{ minio_data_dir }}"
+        - "{{ minio_config_dir }}"
+
+    - name: Create MinIO docker-compose file from template
+      template:
+        src: ../../templates/minio.docker-compose.j2
+        dest: "{{ minio_config_dir }}/docker-compose.yaml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Stop existing MinIO containers
+      shell: docker compose down || true
+      args:
+        chdir: "{{ minio_config_dir }}"
+      ignore_errors: yes
+
+    - name: Start MinIO service
+      shell: docker compose up -d
+      args:
+        chdir: "{{ minio_config_dir }}"
+
+    - name: Wait for MinIO to be ready
+      wait_for:
+        port: 9000
+        host: localhost
+        delay: 10
+        timeout: 60
+
+    - name: Wait for MinIO Console to be ready
+      wait_for:
+        port: 9001
+        host: localhost
+        delay: 5
+        timeout: 30
+
+    - name: Show MinIO container status
+      shell: docker compose ps
+      args:
+        chdir: "{{ minio_config_dir }}"
+      register: minio_status
+
+    - name: Display MinIO status
+      debug:
+        var: minio_status.stdout_lines
+
+    - name: Display MinIO access information
+      debug:
+        msg:
+          - "MinIO API: http://{{ ansible_host }}:9000"
+          - "MinIO Console: http://{{ ansible_host }}:9001"
+          - "Username: {{ minio_root_user }}"
+          - "Password: {{ minio_root_password }}"

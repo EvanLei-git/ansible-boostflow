@@ -1,0 +1,69 @@
+---
+# Global variables for 3-VM DevOps setup
+# Uses .env.local from docker directory for application configuration
+
+# Python interpreter
+ansible_python_interpreter: /usr/bin/python3
+
+# Application Configuration (from .env.local)
+app_name: boostflow
+app_repo: "https://github.com/Kdim67/BoostFlow.git"
+app_port: 3000
+app_dir: "/opt/{{ app_name }}"
+app_user: "boostflow"
+app_group: "boostflow"
+
+# Docker Configuration
+docker_compose_version: "3.8"
+docker_network_name: "{{ app_name }}-network"
+
+# MinIO Configuration (from .env.local)
+minio_port: 9000
+minio_console_port: 9001
+minio_data_dir: "/opt/minio/data"
+minio_config_dir: "/opt/minio/config"
+minio_bucket_name: "{{ app_name }}-uploads"
+minio_root_user: "minioadmin"  # from .env.local MINIO_ROOT_USER
+minio_root_password: "minioadmin"  # from .env.local MINIO_ROOT_PASSWORD
+
+# Web Server Configuration
+nginx_port: 80
+nginx_ssl_port: 443
+nginx_ssl_enabled: false
+
+# Environment Configuration
+node_env: production
+deployment_env: production
+
+# SSH Configuration (using existing keys from VM1)
+ssh_key_path: "~/.ssh/id_boostflow"
+ssh_public_key_path: "~/.ssh/id_boostflow.pub"
+ssh_user: azureuser
+
+# Health Check Configuration
+health_check_timeout: 30
+health_check_retries: 3
+health_check_interval: 10
+
+# Deployment Configuration
+deployment_strategy: rolling
+deployment_max_time: 300
+
+# Backup Configuration
+backup_enabled: true
+backup_retention_days: 7
+
+# Monitoring Configuration
+monitoring_enabled: true
+log_level: info
+
+# Service URLs (IPs are defined in inventory hosts.yaml)
+jenkins_url: "http://{{ hostvars['vag-setup-vm']['ansible_host'] }}:8080"
+nextjs_url: "http://{{ hostvars['vag-prod-vm']['ansible_host'] }}:{{ app_port }}"
+nginx_url: "http://{{ hostvars['vag-prod-vm']['ansible_host'] }}"
+minio_console_url: "http://{{ hostvars['vag-minio-vm']['ansible_host'] }}:{{ minio_console_port }}"
+minio_api_url: "http://{{ hostvars['vag-minio-vm']['ansible_host'] }}:{{ minio_port }}"
+
+# Environment file path (for copying .env.local to VMs)
+env_file_source: "../.env.local"
+env_file_dest: "/opt/{{ app_name }}/.env.local"
