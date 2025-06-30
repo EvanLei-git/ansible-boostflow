@@ -1,16 +1,65 @@
 ---
-# Master deployment playbook - Application deployment
-# Run this to deploy applications after infrastructure is set up
+# Master deployment playbook - Full 3-VM deployment automation
+# Run this to deploy all applications after infrastructure is set up
+# Jenkins: Direct installation on VM1 (vag-setup-vm)
+# Next.js: Docker container on VM2 (vag-prod-vm)
+# MinIO: Docker container on VM3 (vag-minio-vm)
 
-# Deploy Nginx Configuration last (configures reverse proxy for running services)
+# # Step 1: Deploy Jenkins on VM1 (Direct Installation)
+# - name: Deploy Jenkins Service
+#   import_playbook: deploy_jenkins.yaml
+
+# Step 2: Deploy MinIO Storage on VM3
+- name: Deploy MinIO Storage Service
+  import_playbook: deploy_minio_only.yaml
+
+# Step 3: Deploy NextJS Application on VM2
+- name: Deploy NextJS Application
+  import_playbook: deploy_nextjs_only.yaml
+
+# Step 4: Configure Nginx (reverse proxy for running services)
 - name: Deploy Nginx Configuration
   import_playbook: deploy_nginx.yaml
 
-# Deploy Docker Services first (if using Docker deployment)
-- name: Deploy Docker Services
-  import_playbook: deploy_docker.yaml
+# Final verification across all VMs
+- name: Verify Jenkins Deployment (VM1)
+  hosts: vag-setup-vm
+  tasks:
+    - name: Check Jenkins service status
+      systemd:
+        name: jenkins
+        state: started
+      register: jenkins_status
 
-# Deploy Node.js Application (alternative to Docker deployment)
-#- name: Deploy Node.js Application
-#  import_playbook: deploy_nodejs.yaml
+    - name: Display Jenkins deployment summary
+      debug:
+        msg:
+          - "=== {{ inventory_hostname }} Jenkins Deployment Summary ==="
+          - "Jenkins Status: {{ jenkins_status.status.ActiveState }}"
+          - "Jenkins URL: http://{{ ansible_host }}:8080"
+          - "VM Role: Control Plane (Jenkins)"
+
+- name: Verify Docker Deployments (VM2 & VM3)
+  hosts: app_servers
+  tasks:
+    - name: Check Docker service status
+      systemd:
+        name: docker
+        state: started
+      register: docker_status
+
+    - name: List running containers
+      shell: docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+      register: container_status
+      ignore_errors: yes
+
+    - name: Display Docker deployment summary
+      debug:
+        msg:
+          - "=== {{ inventory_hostname }} Docker Deployment Summary ==="
+          - "Docker Status: {{ docker_status.status.ActiveState }}"
+          - "Running Containers:"
+          - "{{ container_status.stdout_lines | default(['No containers running']) }}"
+          - "VM Role: {{ group_names | join(', ') }}"
+          - "Ready for production use!"
 

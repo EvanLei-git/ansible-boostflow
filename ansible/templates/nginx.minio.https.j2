@@ -1,0 +1,184 @@
+server {
+    listen 80;
+    server_name {{ domain_name }};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name {{ domain_name }};
+    ssl_certificate /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ domain_name }}/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+    
+    # MinIO Console (Admin UI) - Access via /console
+    location /console/ {
+        proxy_pass http://127.0.0.1:{{ minio_console_port }}/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Server $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_read_timeout 86400;
+        proxy_buffering off;
+        client_max_body_size 1000M;
+        
+        # MinIO Console specific headers
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_hide_header X-Content-Type-Options;
+    }
+    
+    # MinIO Console login endpoint
+    location /login {
+        proxy_pass http://127.0.0.1:{{ minio_console_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Server $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_read_timeout 86400;
+        proxy_buffering off;
+        client_max_body_size 1000M;
+        
+        # MinIO Console specific headers
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_hide_header X-Content-Type-Options;
+    }
+    
+    # MinIO Console static assets
+    location /static/ {
+        proxy_pass http://127.0.0.1:{{ minio_console_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_buffering off;
+        
+        # Cache static assets
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+    
+    # MinIO Console API endpoints
+    location /api/ {
+        proxy_pass http://127.0.0.1:{{ minio_console_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Server $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_read_timeout 86400;
+        proxy_buffering off;
+        client_max_body_size 1000M;
+        
+        # MinIO Console specific headers
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_hide_header X-Content-Type-Options;
+    }
+    
+    # MinIO Console browser endpoint
+    location /browser {
+        proxy_pass http://127.0.0.1:{{ minio_console_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Server $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_read_timeout 86400;
+        proxy_buffering off;
+        client_max_body_size 1000M;
+        
+        # MinIO Console specific headers
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_hide_header X-Content-Type-Options;
+    }
+    
+    # MinIO Console WebSocket endpoints for real-time features
+    location ~ ^/ws/(.*) {
+        proxy_pass http://127.0.0.1:{{ minio_console_port }}/ws/$1;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Server $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+        proxy_buffering off;
+        
+        # WebSocket specific settings
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_hide_header X-Content-Type-Options;
+    }
+    
+    # Redirect root to console for browser requests (only for GET requests)
+    location = / {
+        if ($request_method = GET) {
+            return 302 /console/;
+        }
+        # For non-GET requests (PUT, POST, DELETE), proxy to S3 API
+        proxy_pass http://127.0.0.1:{{ minio_api_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Server $host;
+        proxy_buffering off;
+        client_max_body_size 1000M;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_set_header Authorization $http_authorization;
+    }
+    
+    # MinIO S3 API - for all other paths (buckets and objects)
+    location / {
+        proxy_pass http://127.0.0.1:{{ minio_api_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Server $host;
+        proxy_buffering off;
+        client_max_body_size 1000M;
+        
+        # S3 API specific headers
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_set_header Authorization $http_authorization;
+        
+        # Handle S3 API specific headers
+        proxy_set_header X-Amz-Content-Sha256 $http_x_amz_content_sha256;
+        proxy_set_header X-Amz-Date $http_x_amz_date;
+        proxy_set_header X-Amz-Security-Token $http_x_amz_security_token;
+    }
+}

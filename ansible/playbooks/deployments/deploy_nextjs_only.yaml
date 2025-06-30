@@ -3,18 +3,35 @@
 # This playbook only targets vag-prod-vm for faster deployments
 
 - name: Deploy NextJS Application Only
-  hosts: vag-prod-vm  # Only target the production VM with NGINX
+  hosts: vag-prod-vm 
   become: no
   vars:
-    branch: "{{ branch | default('main') }}"
-    build_tag: "{{ build_tag | default('latest') }}"
+    # Application Configuration
+    app_name: boostflow
+    app_repo: "https://github.com/Kdim67/BoostFlow.git"
+    app_port: 3000
+    app_dir: "/opt/{{ app_name }}"
+    app_user: "boostflow"
+    app_group: "boostflow"
+    
+    # SSH Configuration
+    ssh_key_path: "~/.ssh/id_boostflow"
+    ssh_user: azureuser
+    
+    # Environment Configuration
+    env_file_source: "../../../.env.local"
+    env_file_dest: "/opt/{{ app_name }}/.env.local"
+    
+    # Deployment Configuration
+    branch: "fast"
+    build_tag: "latest"
   tasks:
     - name: Ensure Boostflow directory exists
       file:
         path: "{{ app_dir }}"
         state: directory
-        owner: "{{ app_user }}"
-        group: "{{ app_group }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
         mode: '0755'
       become: yes
 
@@ -44,6 +61,22 @@
       become_user: "{{ ansible_user }}"
       become: yes
 
+    - name: Remove existing repository if it exists with wrong permissions
+      file:
+        path: "{{ app_dir }}"
+        state: absent
+      become: yes
+      ignore_errors: yes
+
+    - name: Recreate Boostflow directory with correct ownership
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+      become: yes
+
     - name: Clone/Update Boostflow repository
       git:
         repo: "{{ app_repo }}"
@@ -64,24 +97,24 @@
         mode: '0600'
       become: yes
 
-    - name: Copy NextJS-specific docker-compose file
+    - name: Copy NextJS docker-compose file
       copy:
         src: "{{ app_dir }}/docker-compose.nextjs.yaml"
         dest: "{{ app_dir }}/docker-compose.yaml"
+        remote_src: yes
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"
         mode: '0644'
-        remote_src: yes
       become: yes
 
-    - name: Stop existing NextJS application
-      shell: docker compose down || true
+    - name: Stop existing NextJS application and remove orphan containers
+      shell: docker compose down --remove-orphans || true
       args:
         chdir: "{{ app_dir }}"
       ignore_errors: yes
       become: yes
 
-    - name: Build and start NextJS application only
+    - name: Build and start NextJS application
       shell: docker compose up -d --build nextjs
       args:
         chdir: "{{ app_dir }}"
@@ -105,28 +138,131 @@
       debug:
         var: nextjs_status.stdout_lines
 
-# Deploy Nginx Configuration for NextJS (only if needed)
-- name: Update Nginx Configuration
+# Configure Nginx for NextJS App
+- name: Configure Nginx for NextJS App
   hosts: vag-prod-vm
   become: yes
+  vars:
+    domain_name: boostflow.me
+    app_port: 3000
+    app_name: boostflow
+    nginx_port: 80
   tasks:
+    - name: Update package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+
+    - name: Install Certbot and Nginx plugin
+      apt:
+        name:
+          - certbot
+          - python3-certbot-nginx
+        state: present
+
     - name: Ensure Nginx is running
       systemd:
         name: nginx
         state: started
         enabled: yes
 
-    - name: Test Nginx configuration
-      command: nginx -t
-      register: nginx_test
-      ignore_errors: yes
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: restart nginx
 
-    - name: Reload Nginx if configuration is valid
+    - name: Remove any conflicting Nginx sites
+      file:
+        path: "/etc/nginx/sites-enabled/{{ item }}"
+        state: absent
+      loop:
+        - nextjs
+        - default
+      notify: restart nginx
+
+    - name: Create temporary HTTP-only Nginx configuration for NextJS
+      copy:
+        content: |
+          server {
+              listen 80;
+              server_name {{ domain_name }} www.{{ domain_name }};
+              
+              location / {
+                  proxy_pass http://localhost:{{ app_port }};
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_cache_bypass $http_upgrade;
+                  proxy_read_timeout 86400;
+              }
+          }
+        dest: "/etc/nginx/sites-available/{{ domain_name }}"
+        backup: yes
+      notify: restart nginx
+
+    - name: Enable NextJS site (HTTP only)
+      file:
+        src: "/etc/nginx/sites-available/{{ domain_name }}"
+        dest: "/etc/nginx/sites-enabled/{{ domain_name }}"
+        state: link
+      notify: restart nginx
+
+    - name: Restart Nginx before SSL certificate
       systemd:
         name: nginx
-        state: reloaded
-      when: nginx_test.rc == 0
+        state: restarted
+
+    - name: Obtain SSL certificate for NextJS
+      shell: certbot --nginx -d {{ domain_name }} --non-interactive --agree-tos -m {{ letsencrypt_email | default('admin@' + domain_name) }}
+      args:
+        creates: /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem
+
+    - name: Create HTTPS Nginx configuration for NextJS
+      template:
+        src: ../../templates/nginx.nextjs.https.j2
+        dest: "/etc/nginx/sites-available/{{ domain_name }}"
+        backup: yes
+      notify: restart nginx
+      tags:
+        - nginx
+        - config
+
+    - name: Allow SSH access
+      ufw:
+        rule: allow
+        port: '22'
+      ignore_errors: yes
+
+    - name: Allow HTTP traffic
+      ufw:
+        rule: allow
+        port: '80'
+      ignore_errors: yes
+
+    - name: Allow HTTPS traffic
+      ufw:
+        rule: allow
+        port: '443'
+      ignore_errors: yes
 
     - name: Display deployment completion
       debug:
-        msg: "NextJS application deployed successfully on {{ ansible_host }}. MinIO on vag-minio-vm was not affected."
+        msg: "NextJS application with Nginx deployed successfully on {{ ansible_host }}. MinIO on vag-minio-vm was not affected."
+
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+      tags:
+        - nginx

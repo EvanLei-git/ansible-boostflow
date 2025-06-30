@@ -1,6 +1,12 @@
 - name: Install and configure Nginx for Next.js
   hosts: azure_hosts
   become: yes
+  vars:
+    app_name: "boostflow"
+    domain_name: "boostflow.me"
+    nginx_port: 80
+    app_port: 3000
+    ssl_enabled: false
   tasks:
     - name: Install Nginx
       apt:

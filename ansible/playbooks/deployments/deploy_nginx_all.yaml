@@ -1,0 +1,578 @@
+---
+# Simplified Multi-VM Nginx Deployment
+# Basic Nginx setup for all 3 VMs
+# 
+# IMPORTANT: Set your email address for SSL certificates:
+# ansible-playbook -i inventories/production deploy_nginx_all.yaml -e "letsencrypt_email=your-actual-email@domain.com"
+
+# Install Nginx and Certbot on all VMs
+- name: Install Nginx and Certbot on All VMs
+  hosts: azure_hosts
+  become: yes
+  tasks:
+    - name: Update package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+
+    - name: Install Certbot and Nginx plugin
+      apt:
+        name:
+          - certbot
+          - python3-certbot-nginx
+        state: present
+
+    - name: Ensure Nginx is running
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: restart nginx
+
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+
+# Configure Nginx for NextJS App (VM2 - vag-prod-vm)
+- name: Configure Nginx for NextJS App
+  hosts: vag-prod-vm
+  become: yes
+  vars:
+    domain_name: boostflow.me
+    app_port: 3000
+    app_name: boostflow
+    nginx_port: 80
+  tasks:
+    - name: Remove any conflicting Nginx sites
+      file:
+        path: "/etc/nginx/sites-enabled/{{ item }}"
+        state: absent
+      loop:
+        - nextjs
+        - default
+      notify: restart nginx
+
+    - name: Create temporary HTTP-only Nginx configuration for NextJS
+      copy:
+        content: |
+          server {
+              listen 80;
+              server_name {{ domain_name }} www.{{ domain_name }};
+              
+              location / {
+                  proxy_pass http://localhost:{{ app_port }};
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_cache_bypass $http_upgrade;
+                  proxy_read_timeout 86400;
+              }
+          }
+        dest: "/etc/nginx/sites-available/{{ domain_name }}"
+        backup: yes
+      notify: restart nginx
+
+    - name: Enable NextJS site (HTTP only)
+      file:
+        src: "/etc/nginx/sites-available/{{ domain_name }}"
+        dest: "/etc/nginx/sites-enabled/{{ domain_name }}"
+        state: link
+      notify: restart nginx
+
+    - name: Restart Nginx before SSL certificate
+      systemd:
+        name: nginx
+        state: restarted
+
+    - name: Obtain SSL certificate for NextJS
+      shell: certbot --nginx -d {{ domain_name }} --non-interactive --agree-tos -m {{ letsencrypt_email | default('admin@' + domain_name) }}
+      args:
+        creates: /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem
+
+    - name: Create HTTPS Nginx configuration for NextJS
+      template:
+        src: ../../templates/nginx.nextjs.https.j2
+        dest: "/etc/nginx/sites-available/{{ domain_name }}"
+        backup: yes
+      notify: restart nginx
+
+    - name: Allow SSH access
+      ufw:
+        rule: allow
+        port: '22'
+      ignore_errors: yes
+
+    - name: Allow HTTP traffic
+      ufw:
+        rule: allow
+        port: '80'
+      ignore_errors: yes
+
+    - name: Allow HTTPS traffic
+      ufw:
+        rule: allow
+        port: '443'
+      ignore_errors: yes
+
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+
+# Configure Nginx for MinIO (VM3 - vag-minio-vm)
+- name: Configure Nginx for MinIO
+  hosts: vag-minio-vm
+  become: yes
+  vars:
+    domain_name: minio.boostflow.me
+    app_name: "boostflow"
+    minio_port: 9000
+    minio_api_port: 9000
+    minio_console_port: 9001
+    minio_data_dir: "/opt/minio/data"
+    minio_config_dir: "/opt/minio/config"
+    minio_bucket_name: "boostflow-uploads"
+    # Load from environment or use defaults (should be overridden)
+    minio_root_user: "{{ lookup('env', 'MINIO_ROOT_USER') | default('minioadmin') }}"
+    minio_root_password: "{{ lookup('env', 'MINIO_ROOT_PASSWORD') | default('changeme123') }}"
+    health_check_interval: 30
+    health_check_timeout: 20
+    health_check_retries: 3
+    docker_network_name: "boostflow-network"
+    nginx_port: 80
+  tasks:
+    - name: Load environment variables from .env.local
+      shell: |
+        if [ -f "../../../.env.local" ]; then
+          grep -E "^MINIO_ROOT_USER=" ../../../.env.local | cut -d '=' -f2 || echo "minioadmin"
+        else
+          echo "minioadmin"
+        fi
+      register: env_minio_user
+      delegate_to: localhost
+      run_once: true
+
+    - name: Load MinIO password from .env.local
+      shell: |
+        if [ -f "../../../.env.local" ]; then
+          grep -E "^MINIO_ROOT_PASSWORD=" ../../../.env.local | cut -d '=' -f2 || echo "changeme123"
+        else
+          echo "changeme123"
+        fi
+      register: env_minio_password
+      delegate_to: localhost
+      run_once: true
+
+    - name: Load additional MinIO variables from .env.local
+      shell: |
+        if [ -f "../../../.env.local" ]; then
+          grep -E "^{{ item }}=" ../../../.env.local | cut -d '=' -f2 || echo ""
+        else
+          echo ""
+        fi
+      register: env_minio_vars
+      delegate_to: localhost
+      run_once: true
+      loop:
+        - MINIO_ENDPOINT
+        - MINIO_EXTERNAL_ENDPOINT
+        - MINIO_PORT
+        - MINIO_USE_SSL
+        - MINIO_PROFILE_PICTURES_BUCKET
+        - MINIO_PROJECT_DOCUMENTS_BUCKET
+
+    - name: Set MinIO credentials from environment
+      set_fact:
+        minio_root_user: "{{ env_minio_user.stdout }}"
+        minio_root_password: "{{ env_minio_password.stdout }}"
+
+    - name: Install Python pip (required for Docker SDK)
+      apt:
+        name: python3-pip
+        state: present
+   
+    - name: Install Docker Compose plugin
+      apt:
+        name: docker-compose-plugin
+        state: present
+
+    - name: Ensure user is in docker group (should already be set up)
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+
+    - name: Create MinIO directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+      loop:
+        - "{{ minio_data_dir }}"
+        - "{{ minio_config_dir }}"
+
+    - name: Create MinIO docker-compose file (without obsolete version)
+      copy:
+        content: |
+          services:
+            minio:
+              image: minio/minio:latest
+              container_name: minio
+              restart: unless-stopped
+              ports:
+                - "{{ minio_api_port }}:9000"
+                - "{{ minio_console_port }}:9001"
+              environment:
+                MINIO_ROOT_USER: "{{ minio_root_user }}"
+                MINIO_ROOT_PASSWORD: "{{ minio_root_password }}"
+                MINIO_BROWSER_REDIRECT_URL: "https://{{ domain_name }}/console"
+                MINIO_SERVER_URL: "https://{{ domain_name }}"
+                MINIO_BROWSER_REDIRECT: "off"
+              volumes:
+                - "{{ minio_data_dir }}:/data"
+              command: server /data --console-address ":9001"
+              networks:
+                - "{{ docker_network_name }}"
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+                interval: "{{ health_check_interval }}s"
+                timeout: "{{ health_check_timeout }}s"
+                retries: {{ health_check_retries }}
+          
+          networks:
+            "{{ docker_network_name }}":
+              driver: bridge
+        dest: /opt/minio/docker-compose.yaml
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Copy complete .env.local file from ansible-boostflow
+      copy:
+        src: "../../../.env.local"
+        dest: /opt/minio/.env.local
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+        backup: yes
+
+    # Stop any existing MinIO containers
+    - name: Stop existing MinIO containers
+      shell: docker compose down
+      args:
+        chdir: /opt/minio
+      become_user: "{{ ansible_user }}"
+      ignore_errors: yes
+
+    # Clean up any dangling containers using port 9000
+    - name: Stop any containers using port 9000
+      shell: |
+        docker ps --filter "publish=9000" -q | xargs -r docker stop
+        docker ps -a --filter "publish=9000" -q | xargs -r docker rm
+      become_user: "{{ ansible_user }}"
+      ignore_errors: yes
+
+    # Reset SSH connection to pick up docker group membership
+    - name: Reset SSH connection to allow user session to pick up new group membership
+      meta: reset_connection
+
+    - name: Start MinIO service using docker compose
+      shell: docker compose up -d
+      args:
+        chdir: /opt/minio
+      become_user: "{{ ansible_user }}"
+
+    - name: Wait for MinIO to be ready
+      wait_for:
+        port: "{{ minio_api_port }}"
+        host: localhost
+        delay: 10
+        timeout: 60
+
+    - name: Create temporary HTTP-only Nginx configuration for MinIO
+      copy:
+        content: |
+          server {
+              listen 80;
+              server_name {{ domain_name }};
+              
+              # MinIO API
+              location / {
+                  proxy_pass http://localhost:{{ minio_api_port }};
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_cache_bypass $http_upgrade;
+                  proxy_read_timeout 86400;
+                  
+                  # MinIO specific headers
+                  proxy_set_header X-Forwarded-Host $host;
+                  proxy_set_header X-Forwarded-Server $host;
+                  proxy_buffering off;
+                  client_max_body_size 1000M;
+              }
+              
+              # MinIO Console (Admin UI)
+              location /console/ {
+                  rewrite ^/console/(.*) /$1 break;
+                  proxy_pass http://localhost:{{ minio_console_port }};
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_cache_bypass $http_upgrade;
+                  proxy_read_timeout 86400;
+              }
+          }
+        dest: "/etc/nginx/sites-available/{{ domain_name }}"
+        backup: yes
+      notify: restart nginx
+
+    - name: Enable MinIO site (HTTP only)
+      file:
+        src: "/etc/nginx/sites-available/{{ domain_name }}"
+        dest: "/etc/nginx/sites-enabled/{{ domain_name }}"
+        state: link
+      notify: restart nginx
+
+    - name: Restart Nginx before SSL certificate
+      systemd:
+        name: nginx
+        state: restarted
+
+    - name: Configure firewall for web traffic
+      block:
+        - name: Allow SSH (port 22) - IMPORTANT
+          ufw:
+            rule: allow
+            port: '22'
+            proto: tcp
+
+        - name: Allow HTTP (port 80) for Let's Encrypt
+          ufw:
+            rule: allow
+            port: '80'
+            proto: tcp
+
+        - name: Allow HTTPS (port 443)
+          ufw:
+            rule: allow
+            port: '443'
+            proto: tcp
+
+        - name: Enable UFW firewall
+          ufw:
+            state: enabled
+            policy: deny
+
+    - name: Restart nginx before SSL
+      systemd:
+        name: nginx
+        state: restarted
+
+    - name: Test local nginx connectivity
+      uri:
+        url: "http://localhost"
+        method: GET
+        timeout: 5
+      register: local_test
+      ignore_errors: yes
+
+    - name: Display local test result
+      debug:
+        msg: "Local nginx test: {{ local_test.status | default('failed') }}"
+
+    - name: Obtain SSL certificate for MinIO
+      shell: certbot --nginx -d {{ domain_name }} --non-interactive --agree-tos -m {{ letsencrypt_email | default('support@' + domain_name) }}
+      args:
+        creates: /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem
+
+    - name: Create HTTPS Nginx configuration for MinIO
+      template:
+        src: ../../templates/nginx.minio.https.j2
+        dest: "/etc/nginx/sites-available/{{ domain_name }}"
+        backup: yes
+      notify: restart nginx
+
+    - name: Allow SSH access
+      ufw:
+        rule: allow
+        port: '22'
+      ignore_errors: yes
+
+    - name: Allow HTTP traffic
+      ufw:
+        rule: allow
+        port: '80'
+      ignore_errors: yes
+
+    - name: Allow HTTPS traffic
+      ufw:
+        rule: allow
+        port: '443'
+      ignore_errors: yes
+
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+
+# Configure Nginx for Jenkins (VM1 - vag-setup-vm)
+- name: Configure Nginx for Jenkins
+  hosts: vag-setup-vm
+  become: yes
+  vars:
+    domain_name: jenkins.boostflow.me
+    jenkins_port: 8080
+    nginx_port: 80
+  tasks:
+    - name: Install Jenkins
+      include_tasks: ../tasks/install_jenkins.yaml
+
+    - name: Create temporary HTTP-only Nginx configuration for Jenkins
+      copy:
+        content: |
+          server {
+              listen 80;
+              server_name {{ domain_name }};
+              
+              location / {
+                  proxy_pass http://localhost:{{ jenkins_port }};
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_cache_bypass $http_upgrade;
+                  proxy_read_timeout 86400;
+                  
+                  # Jenkins specific headers
+                  proxy_set_header X-Forwarded-Port $server_port;
+                  proxy_set_header X-Forwarded-Host $host;
+                  proxy_set_header X-Forwarded-Server $host;
+                  proxy_buffering off;
+                  client_max_body_size 100M;
+              }
+          }
+        dest: "/etc/nginx/sites-available/{{ domain_name }}"
+        backup: yes
+      notify: restart nginx
+
+    - name: Enable Jenkins site (HTTP only)
+      file:
+        src: "/etc/nginx/sites-available/{{ domain_name }}"
+        dest: "/etc/nginx/sites-enabled/{{ domain_name }}"
+        state: link
+      notify: restart nginx
+
+    - name: Restart Nginx before SSL certificate
+      systemd:
+        name: nginx
+        state: restarted
+        
+    - name: Configure firewall for web traffic
+      block:
+        - name: Allow SSH (port 22) - IMPORTANT
+          ufw:
+            rule: allow
+            port: '22'
+            proto: tcp
+
+        - name: Allow HTTP (port 80) for Let's Encrypt
+          ufw:
+            rule: allow
+            port: '80'
+            proto: tcp
+
+        - name: Allow HTTPS (port 443)
+          ufw:
+            rule: allow
+            port: '443'
+            proto: tcp
+
+        - name: Enable UFW firewall
+          ufw:
+            state: enabled
+            policy: deny
+
+    - name: Restart nginx before SSL
+      systemd:
+        name: nginx
+        state: restarted
+
+    - name: Test local nginx connectivity
+      uri:
+        url: "http://localhost"
+        method: GET
+        timeout: 5
+      register: local_test
+      ignore_errors: yes
+
+    - name: Display local test result
+      debug:
+        msg: "Local nginx test: {{ local_test.status | default('failed') }}"
+
+    - name: Obtain SSL certificate for Jenkins
+      shell: certbot --nginx -d {{ domain_name }} --non-interactive --agree-tos -m {{ letsencrypt_email | default('testadmin@' + domain_name) }}
+      args:
+        creates: /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem
+
+    - name: Create HTTPS Nginx configuration for Jenkins
+      template:
+        src: ../../templates/nginx.jenkins.https.j2
+        dest: "/etc/nginx/sites-available/{{ domain_name }}"
+        backup: yes
+      notify: restart nginx
+
+    - name: Allow SSH access
+      ufw:
+        rule: allow
+        port: '22'
+      ignore_errors: yes
+
+    - name: Allow HTTP traffic
+      ufw:
+        rule: allow
+        port: '80'
+      ignore_errors: yes
+
+    - name: Allow HTTPS traffic
+      ufw:
+        rule: allow
+        port: '443'
+      ignore_errors: yes
+
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted

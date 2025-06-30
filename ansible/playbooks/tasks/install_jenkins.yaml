@@ -31,19 +31,26 @@
     name: jenkins
     state: present
 
-- name: Add jenkins user to docker group
+- name: Add jenkins user to docker group (if docker is installed)
   user:
     name: jenkins
     groups: docker
     append: yes
+  ignore_errors: yes
 
 - name: Start and enable Jenkins
   systemd:
     name: jenkins
     state: started
     enabled: yes
+    daemon_reload: yes
 
-
+- name: Wait for Jenkins to be ready
+  wait_for:
+    port: 8080
+    host: localhost
+    delay: 30
+    timeout: 180
 
 - name: Install Ansible for Jenkins
   apt:
@@ -72,12 +79,11 @@
     - known_hosts
 
 - name: Get Jenkins initial admin password
-  shell: cat /var/lib/jenkins/secrets/initialAdminPassword
-  register: jenkins_password
-  changed_when: false
-  when: false 
+  slurp:
+    src: /var/lib/jenkins/secrets/initialAdminPassword
+  register: jenkins_password_file
+  ignore_errors: yes
 
 - name: Display Jenkins initial password
   debug:
-    msg: "Jenkins initial admin password: {{ jenkins_password.stdout }}"
-  when: false 
+    msg: "Jenkins initial admin password: {{ jenkins_password_file.content | b64decode | trim if jenkins_password_file.content is defined else 'Check /var/lib/jenkins/secrets/initialAdminPassword' }}"

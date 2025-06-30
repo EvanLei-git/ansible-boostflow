@@ -1,7 +1,12 @@
 ---
 - name: Deploy Nginx Configuration
-  hosts: azure_hosts
+  hosts: vag-prod-vm
   become: yes
+  vars:
+    domain_name: boostflow.me
+    app_name: boostflow
+    app_port: 3000
+    nginx_port: 80
   tasks:
     - name: Ensure Nginx is running
       systemd:

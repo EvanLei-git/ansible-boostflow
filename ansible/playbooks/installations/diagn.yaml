@@ -1,0 +1,115 @@
+---
+# Quick diagnostic playbook to check MinIO credential extraction
+- name: Diagnose MinIO Credential Issues
+  hosts: vag-minio-vm
+  become: yes
+  vars:
+    ansible_user: azureuser
+  tasks:
+    
+    # First, let's see what's in the .env.local file
+    - name: Check if .env.local exists locally
+      local_action:
+        module: stat
+        path: "{{ playbook_dir }}/../../../.env.local"
+      register: local_env_file
+
+    - name: Display local .env.local file status
+      debug:
+        msg: "Local .env.local exists: {{ local_env_file.stat.exists }}"
+
+    # Copy the file again
+    - name: Copy .env.local file to target server
+      copy:
+        src: "{{ playbook_dir }}/../../../.env.local"
+        dest: /tmp/.env.local
+        mode: '0600'
+
+    # Show the raw content
+    - name: Show raw .env.local content
+      shell: cat /tmp/.env.local
+      register: raw_env_content
+
+    - name: Display raw .env.local content
+      debug:
+        msg: "{{ raw_env_content.stdout_lines }}"
+
+    # Show hex dump to see hidden characters
+    - name: Show .env.local hex dump (first 200 bytes)
+      shell: head -c 200 /tmp/.env.local | xxd
+      register: hex_dump
+
+    - name: Display hex dump
+      debug:
+        msg: "{{ hex_dump.stdout_lines }}"
+
+    # Test the grep commands
+    - name: Test MINIO_ROOT_USER grep
+      shell: grep '^MINIO_ROOT_USER=' /tmp/.env.local
+      register: user_grep
+      ignore_errors: yes
+
+    - name: Test MINIO_ROOT_PASSWORD grep
+      shell: grep '^MINIO_ROOT_PASSWORD=' /tmp/.env.local
+      register: password_grep
+      ignore_errors: yes
+
+    - name: Display grep results
+      debug:
+        msg:
+          - "User grep result: '{{ user_grep.stdout }}'"
+          - "Password grep result: '{{ password_grep.stdout }}'"
+          - "User grep rc: {{ user_grep.rc }}"
+          - "Password grep rc: {{ password_grep.rc }}"
+
+    # Test the improved extraction
+    - name: Test improved user extraction
+      shell: |
+        grep '^MINIO_ROOT_USER=' /tmp/.env.local | cut -d'=' -f2- | sed 's/^["'\'']//' | sed 's/["'\'']$//' | tr -d '\r\n'
+      register: improved_user
+      ignore_errors: yes
+
+    - name: Test improved password extraction
+      shell: |
+        grep '^MINIO_ROOT_PASSWORD=' /tmp/.env.local | cut -d'=' -f2- | sed 's/^["'\'']//' | sed 's/["'\'']$//' | tr -d '\r\n'
+      register: improved_password
+      ignore_errors: yes
+
+    - name: Display improved extraction results
+      debug:
+        msg:
+          - "Improved user: '{{ improved_user.stdout }}'"
+          - "Improved password: '{{ improved_password.stdout }}'"
+          - "User length: {{ improved_user.stdout | length }}"
+          - "Password length: {{ improved_password.stdout | length }}"
+
+    # Check current docker containers
+    - name: Check running containers
+      shell: docker ps
+      register: docker_ps
+      become_user: "{{ ansible_user }}"
+
+    - name: Display running containers
+      debug:
+        msg: "{{ docker_ps.stdout_lines }}"
+
+    # Check MinIO container logs
+    - name: Get MinIO container logs
+      shell: docker logs minio 2>&1 | tail -20
+      register: minio_logs
+      become_user: "{{ ansible_user }}"
+      ignore_errors: yes
+
+    - name: Display MinIO logs
+      debug:
+        msg: "{{ minio_logs.stdout_lines }}"
+      when: minio_logs.stdout is defined
+
+    # Check the docker-compose file that was generated
+    - name: Show current docker-compose.yaml
+      shell: cat /opt/minio/docker-compose.yaml
+      register: current_compose
+
+    - name: Display current docker-compose.yaml
+      debug:
+        msg: "{{ current_compose.stdout_lines }}"

@@ -2,51 +2,52 @@
 # Complete 3-VM Infrastructure Setup
 # This playbook sets up the entire infrastructure for the DevOps assignment
 
-# VM1: Jenkins + Ansible Controller Setup
-- name: Setup Jenkins and Ansible Controller (VM1)
-  hosts: vag-setup-vm
-  become: yes
-  tasks:
-    - name: Update system packages
-      apt:
-        update_cache: yes
-        upgrade: dist
-        cache_valid_time: 3600
+# # VM1: Jenkins + Ansible Controller Setup
+# - name: Setup Jenkins and Ansible Controller (VM1)
+#   hosts: vag-setup-vm
+#   become: yes
+#   tasks:
+#     - name: Update system packages
+#       apt:
+#         update_cache: yes
+#         upgrade: dist
+#         cache_valid_time: 3600
 
-    - name: Install required packages
-      apt:
-        name:
-          - curl
-          - wget
-          - git
-          - python3
-          - python3-pip
-          - software-properties-common
-          - apt-transport-https
-          - ca-certificates
-          - gnupg
-          - lsb-release
-        state: present
+#     - name: Install required packages
+#       apt:
+#         name:
+#           - curl
+#           - wget
+#           - git
+#           - python3
+#           - python3-pip
+#           - software-properties-common
+#           - apt-transport-https
+#           - ca-certificates
+#           - gnupg
+#           - lsb-release
+#         state: present
 
-    - name: Install Docker
-      include_tasks: ../tasks/install_docker.yaml
+#     - name: Install Docker
+#       include_tasks: ../tasks/install_docker.yaml
 
-    - name: Install Jenkins
-      include_tasks: ../tasks/install_jenkins.yaml
+#     - name: Install Jenkins
+#       include_tasks: ../tasks/install_jenkins.yaml
 
-    - name: Install Ansible
-      apt:
-        name: ansible
-        state: present
+#     - name: Install Ansible
+#       apt:
+#         name: ansible
+#         state: present
 
-    - name: Create Jenkins workspace directory
-      file:
-        path: /var/lib/jenkins/workspace
-        state: directory
-        owner: jenkins
-        group: jenkins
-        mode: '0755'
+#     - name: Create Jenkins workspace directory
+#       file:
+#         path: /var/lib/jenkins/workspace
+#         state: directory
+#         owner: jenkins
+#         group: jenkins
+#         mode: '0755'
 
+    #DONT UNCOMMENT...
     # - name: Clone ansible-boostflow repository for Jenkins
     #   git:
     #     repo: "https://github.com/EvanLei-git/ansible-boostflow.git"
@@ -58,13 +59,15 @@
     #   vars:
     #     ansible_common_remote_group: jenkins
 
-    - name: Set up SSH keys for Jenkins
-      file:
-        path: /var/lib/jenkins/.ssh
-        state: directory
-        owner: jenkins
-        group: jenkins
-        mode: '0700'
+
+    #UNCOMMENT THIS not the above
+    # - name: Set up SSH keys for Jenkins
+    #   file:
+    #     path: /var/lib/jenkins/.ssh
+    #     state: directory
+    #     owner: jenkins
+    #     group: jenkins
+    #     mode: '0700'
 
 
 # VM2: Production Application Server Setup
@@ -76,12 +79,16 @@
     app_group: "boostflow"
     app_dir: "/opt/boostflow"
     app_name: "boostflow"
+    nginx_port: 80
+    app_port: 3000
+    domain_name: "boostflow.me"
   tasks:
     - name: Update system packages
       apt:
         update_cache: yes
         upgrade: dist
         cache_valid_time: 3600
+      ignore_errors: yes
 
     - name: Install Docker
       include_tasks: ../tasks/install_docker.yaml
@@ -115,7 +122,7 @@
 
     - name: Configure Nginx for NextJS
       template:
-        src: ../templates/nginx.nextjs.j2
+        src: ../../templates/nginx.nextjs.j2
         dest: /etc/nginx/sites-available/nextjs
         backup: yes
       notify: restart nginx
@@ -132,6 +139,13 @@
         path: /etc/nginx/sites-enabled/default
         state: absent
       notify: restart nginx
+
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+        enabled: yes
 
 # VM3: MinIO Storage Server Setup
 - name: Setup MinIO Storage Server (VM3)

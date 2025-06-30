@@ -1,14 +1,158 @@
 ---
 # MinIO-only deployment playbook for VM3 (vag-minio-vm)
-# This playbook deploys only MinIO storage service
+# This playbook deploys MinIO storage service with Docker and Nginx proxy
 
-- name: Deploy MinIO Storage Service
+- name: Deploy MinIO Storage Service with Nginx
   hosts: vag-minio-vm
   become: yes
   vars:
-    deployment_env: "{{ deployment_env | default('production') }}"
+    # Application Configuration
+    app_name: "boostflow"
+    deployment_env: "production"
+    domain_name: minio.boostflow.me
+    
+    # MinIO Configuration
+    minio_port: 9000
+    minio_api_port: 9000
+    minio_console_port: 9001
+    minio_data_dir: "/opt/minio/data"
+    minio_config_dir: "/opt/minio/config"
+    minio_bucket_name: "boostflow-uploads"
+    health_check_interval: 30
+    health_check_timeout: 20
+    health_check_retries: 3
+    
+    # Docker Configuration
+    docker_network_name: "boostflow-network"
+    
+    # Nginx Configuration
+    nginx_port: 80
+    
+    # Path to source .env.local file (Linux home directory path)
+    env_file_source: "~/ansible-boostflow/.env.local"
+    env_file_dest: "/opt/boostflow/.env.local"
+    
+    # Additional variables needed (copied from group_vars/all.yaml)
+    ansible_user: azureuser
+    letsencrypt_email: "support@boostflow.me"
     
   tasks:
+    - name: Copy .env.local file to target server first
+      copy:
+        src: "{{ playbook_dir }}/../../../.env.local"
+        dest: /tmp/.env.local
+        mode: '0600'
+
+    - name: Create MinIO directory
+      file:
+        path: /opt/minio
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Copy .env.local file to MinIO directory
+      copy:
+        src: "{{ playbook_dir }}/../../../.env.local"
+        dest: /opt/minio/.env.local
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+
+    - name: Load MINIO_ROOT_USER from copied .env.local (with proper cleaning)
+      shell: |
+        grep '^MINIO_ROOT_USER=' /tmp/.env.local | cut -d'=' -f2- | sed 's/^["'\'']//' | sed 's/["'\'']$//' | tr -d '\r\n'
+      register: minio_user
+
+    - name: Load MINIO_ROOT_PASSWORD from copied .env.local (with proper cleaning)
+      shell: |
+        grep '^MINIO_ROOT_PASSWORD=' /tmp/.env.local | cut -d'=' -f2- | sed 's/^["'\'']//' | sed 's/["'\'']$//' | tr -d '\r\n'
+      register: minio_password
+
+    - name: Set MinIO credentials
+      set_fact:
+        minio_root_user: "{{ minio_user.stdout | trim }}"
+        minio_root_password: "{{ minio_password.stdout | trim }}"
+
+    - name: Validate MinIO credentials are not empty
+      fail:
+        msg: "MinIO credentials are empty or invalid. User: '{{ minio_root_user }}', Password length: {{ minio_root_password | length }}"
+      when: minio_root_user | length == 0 or minio_root_password | length == 0
+
+    - name: Debug loaded credentials (enhanced)
+      debug:
+        msg: |
+          Loaded credentials:
+          - User: '{{ minio_root_user }}'
+          - Password: '{{ minio_root_password }}'
+          - User length: {{ minio_root_user | length }}
+          - Password length: {{ minio_root_password | length }}
+          - Raw user output: '{{ minio_user.stdout }}'
+          - Raw password output: '{{ minio_password.stdout }}'
+
+    - name: Display .env.local content for debugging
+      shell: cat /tmp/.env.local | head -10
+      register: env_file_content
+
+    - name: Show .env.local content
+      debug:
+        msg: "{{ env_file_content.stdout_lines }}"
+
+    - name: Verify generated docker-compose.yaml content
+      shell: cat /opt/minio/docker-compose.yaml
+      register: docker_compose_content
+      ignore_errors: yes
+
+    - name: Display docker-compose.yaml content
+      debug:
+        msg: "{{ docker_compose_content.stdout }}"
+      when: docker_compose_content.stdout is defined
+
+    - name: Update package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+
+    - name: Install Certbot and Nginx plugin
+      apt:
+        name:
+          - certbot
+          - python3-certbot-nginx
+        state: present
+
+    - name: Install Python pip (required for Docker SDK)
+      apt:
+        name: python3-pip
+        state: present
+   
+    - name: Install Docker Compose plugin
+      apt:
+        name: docker-compose-plugin
+        state: present
+
+    - name: Ensure user is in docker group (should already be set up)
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+
+    - name: Ensure Nginx is running
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: restart nginx
+
     - name: Create MinIO directories
       file:
         path: "{{ item }}"
@@ -20,53 +164,356 @@
         - "{{ minio_data_dir }}"
         - "{{ minio_config_dir }}"
 
-    - name: Create MinIO docker-compose file from template
-      template:
-        src: ../../templates/minio.docker-compose.j2
-        dest: "{{ minio_config_dir }}/docker-compose.yaml"
+    - name: Create MinIO docker-compose file (without obsolete version)
+      copy:
+        content: |
+          services:
+            minio:
+              image: minio/minio
+              container_name: minio
+              restart: always
+              env_file:
+                - .env.local
+              ports:
+                - "9000:9000"
+                - "9001:9001"
+              volumes:
+                - "{{ minio_data_dir }}:/data"
+              command: server /data --console-address ":9001"
+              networks:
+                - "{{ docker_network_name }}"
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+          
+          networks:
+            "{{ docker_network_name }}":
+              driver: bridge
+        dest: /opt/minio/docker-compose.yaml
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"
         mode: '0644'
 
+
+
+    # Stop any existing MinIO containers
     - name: Stop existing MinIO containers
-      shell: docker compose down || true
+      shell: docker compose down
       args:
-        chdir: "{{ minio_config_dir }}"
+        chdir: /opt/minio
+      become_user: "{{ ansible_user }}"
       ignore_errors: yes
 
-    - name: Start MinIO service
+    # Clean up any dangling containers using port 9000
+    - name: Stop any containers using port 9000
+      shell: |
+        docker ps --filter "publish=9000" -q | xargs -r docker stop
+        docker ps -a --filter "publish=9000" -q | xargs -r docker rm
+      become_user: "{{ ansible_user }}"
+      ignore_errors: yes
+
+    # Reset SSH connection to pick up docker group membership
+    - name: Reset SSH connection to allow user session to pick up new group membership
+      meta: reset_connection
+
+    - name: Create Docker network if it doesn't exist
+      shell: docker network create {{ docker_network_name }} || true
+      become_user: "{{ ansible_user }}"
+      ignore_errors: yes
+
+    - name: Start MinIO service using docker compose
       shell: docker compose up -d
       args:
-        chdir: "{{ minio_config_dir }}"
+        chdir: /opt/minio
+      become_user: "{{ ansible_user }}"
+
+    - name: Check MinIO container logs
+      shell: docker logs minio
+      register: minio_logs
+      ignore_errors: yes
+      become_user: "{{ ansible_user }}"
+
+    - name: Display MinIO logs
+      debug:
+        msg: "{{ minio_logs.stdout_lines[-20:] if minio_logs.stdout_lines is defined else 'No logs available' }}"
+      when: minio_logs is defined
 
     - name: Wait for MinIO to be ready
       wait_for:
-        port: 9000
+        port: "{{ minio_api_port }}"
         host: localhost
         delay: 10
         timeout: 60
 
-    - name: Wait for MinIO Console to be ready
+    - name: Create HTTP-only Nginx configuration for MinIO (temporary for SSL setup)
+      template:
+        src: ../../templates/nginx.minio.j2
+        dest: "/etc/nginx/sites-available/{{ domain_name }}"
+        backup: yes
+      notify: restart nginx
+
+    - name: Enable MinIO site (HTTP only)
+      file:
+        src: "/etc/nginx/sites-available/{{ domain_name }}"
+        dest: "/etc/nginx/sites-enabled/{{ domain_name }}"
+        state: link
+      notify: restart nginx
+
+    - name: Restart Nginx before SSL certificate
+      systemd:
+        name: nginx
+        state: restarted
+
+    - name: Configure firewall for web traffic
+      block:
+        - name: Allow SSH (port 22) - IMPORTANT
+          ufw:
+            rule: allow
+            port: '22'
+            proto: tcp
+
+        - name: Allow HTTP (port 80) for Let's Encrypt
+          ufw:
+            rule: allow
+            port: '80'
+            proto: tcp
+
+        - name: Allow HTTPS (port 443)
+          ufw:
+            rule: allow
+            port: '443'
+            proto: tcp
+
+        - name: Enable UFW firewall
+          ufw:
+            state: enabled
+            policy: deny
+
+    - name: Restart nginx before SSL
+      systemd:
+        name: nginx
+        state: restarted
+
+    - name: Check if MinIO container is running
+      shell: docker ps --filter "name=minio" --format "table {{"{{.Names}}"}}\t{{"{{.Status}}"}}\t{{"{{.Ports}}"}}"
+      register: minio_container_status
+      become_user: "{{ ansible_user }}"
+      ignore_errors: yes
+
+    - name: Display MinIO container status
+      debug:
+        msg: "{{ minio_container_status.stdout_lines }}"
+      when: minio_container_status.stdout_lines is defined
+
+    - name: Test MinIO API port connectivity
       wait_for:
-        port: 9001
+        port: "{{ minio_api_port }}"
+        host: localhost
+        timeout: 5
+      register: api_port_test
+      ignore_errors: yes
+
+    - name: Test MinIO Console port connectivity
+      wait_for:
+        port: "{{ minio_console_port }}"
+        host: localhost
+        timeout: 5
+      register: console_port_test
+      ignore_errors: yes
+
+    - name: Display port connectivity results
+      debug:
+        msg:
+          - "API port {{ minio_api_port }}: {{ 'OPEN' if api_port_test is succeeded else 'CLOSED' }}"
+          - "Console port {{ minio_console_port }}: {{ 'OPEN' if console_port_test is succeeded else 'CLOSED' }}"
+
+    - name: Test MinIO health endpoint directly
+      uri:
+        url: "http://localhost:{{ minio_api_port }}/minio/health/live"
+        method: GET
+        timeout: 5
+      register: minio_health_test
+      ignore_errors: yes
+
+    - name: Display MinIO health test result
+      debug:
+        msg: "MinIO health endpoint: {{ 'HEALTHY' if minio_health_test.status == 200 else 'UNHEALTHY - Status: ' + (minio_health_test.status | string) }}"
+
+    - name: Restart MinIO if health check failed
+      shell: docker compose down && sleep 5 && docker compose up -d
+      args:
+        chdir: /opt/minio
+      become_user: "{{ ansible_user }}"
+      when: minio_health_test.status != 200
+
+    - name: Wait for MinIO to be ready after potential restart
+      wait_for:
+        port: "{{ minio_api_port }}"
         host: localhost
         delay: 5
         timeout: 30
+      when: minio_health_test.status != 200
 
-    - name: Show MinIO container status
-      shell: docker compose ps
-      args:
-        chdir: "{{ minio_config_dir }}"
-      register: minio_status
+    - name: Test local nginx connectivity
+      uri:
+        url: "http://localhost"
+        method: GET
+        timeout: 5
+      register: local_test
+      ignore_errors: yes
 
-    - name: Display MinIO status
+    - name: Display local test result
       debug:
-        var: minio_status.stdout_lines
+        msg: "Local nginx test: {{ local_test.status | default('failed') }}"
+
+    - name: Obtain SSL certificate for MinIO
+      shell: certbot --nginx -d {{ domain_name }} --non-interactive --agree-tos -m {{ letsencrypt_email }}
+      args:
+        creates: /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem
+
+    - name: Wait for SSL certificate to be available
+      wait_for:
+        path: /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem
+        timeout: 30
+
+    - name: Create HTTPS Nginx configuration for MinIO
+      template:
+        src: ../../templates/nginx.minio.https.j2
+        dest: "/etc/nginx/sites-available/{{ domain_name }}"
+        backup: yes
+      notify: restart nginx
+      tags:
+        - nginx
+        - config
+
+    - name: Restart Nginx with HTTPS configuration
+      systemd:
+        name: nginx
+        state: restarted
+      tags:
+        - nginx
+
+    - name: Update MinIO docker-compose for HTTPS
+      copy:
+        content: |
+          services:
+            minio:
+              image: minio/minio
+              container_name: minio
+              restart: always
+              env_file:
+                - .env.local
+              ports:
+                - "{{ minio_api_port }}:9000"
+                - "{{ minio_console_port }}:9001"
+              volumes:
+                - "{{ minio_data_dir }}:/data"
+              command: server /data --console-address ":9001"
+              networks:
+                - "{{ docker_network_name }}"
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+          
+          networks:
+            "{{ docker_network_name }}":
+              driver: bridge
+        dest: /opt/minio/docker-compose.yaml
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Restart MinIO container with updated configuration
+      shell: docker compose down && docker compose up -d
+      args:
+        chdir: /opt/minio
+      become_user: "{{ ansible_user }}"
+
+    - name: Wait for MinIO to be ready after HTTPS configuration
+      wait_for:
+        port: "{{ minio_api_port }}"
+        host: localhost
+        delay: 5
+        timeout: 60
+
+    - name: Test HTTPS connectivity
+      uri:
+        url: "https://{{ domain_name }}/console/"
+        method: GET
+        validate_certs: no
+        timeout: 10
+      register: https_test
+      ignore_errors: yes
+
+    - name: Display test results
+      debug:
+        msg: "HTTPS test: {{ 'SUCCESS' if https_test.status == 200 else 'FAILED' }}"
+
+    - name: Allow SSH access
+      ufw:
+        rule: allow
+        port: '22'
+      ignore_errors: yes
+
+    - name: Allow HTTP traffic
+      ufw:
+        rule: allow
+        port: '80'
+      ignore_errors: yes
+
+    - name: Allow HTTPS traffic
+      ufw:
+        rule: allow
+        port: '443'
+      ignore_errors: yes
+
+    # Ensure MinIO starts automatically on boot
+    - name: Create systemd service for MinIO
+      copy:
+        content: |
+          [Unit]
+          Description=MinIO Docker Compose Service
+          After=docker.service
+          Requires=docker.service
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          WorkingDirectory=/opt/minio
+          ExecStart=/usr/bin/docker compose up -d
+          ExecStop=/usr/bin/docker compose down
+          TimeoutStartSec=0
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/minio-docker.service
+        mode: '0644'
+      notify: reload systemd
+
+    - name: Enable MinIO service to start on boot
+      systemd:
+        name: minio-docker
+        enabled: yes
+        daemon_reload: yes
 
     - name: Display MinIO access information
       debug:
         msg:
-          - "MinIO API: http://{{ ansible_host }}:9000"
-          - "MinIO Console: http://{{ ansible_host }}:9001"
-          - "Username: {{ minio_root_user }}"
-          - "Password: {{ minio_root_password }}"
+          - "MinIO API: https://{{ domain_name }}"
+          - "MinIO Console: https://{{ domain_name }}/console/"
+          - "Container: minio"
+
+
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+        
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
