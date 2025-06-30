@@ -1,0 +1,21 @@
+---
+# Handlers for service restarts
+- name: restart docker
+  systemd:
+    name: docker
+    state: restarted
+
+- name: restart containerd
+  systemd:
+    name: containerd
+    state: restarted
+
+- name: restart nginx
+  systemd:
+    name: nginx
+    state: restarted
+
+- name: restart jenkins
+  systemd:
+    name: jenkins
+    state: restarted

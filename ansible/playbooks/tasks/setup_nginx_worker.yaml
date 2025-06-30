@@ -1,0 +1,68 @@
+---
+# Setup NGINX on worker node for ingress support
+- name: Install NGINX
+  apt:
+    name: nginx
+    state: present
+    update_cache: yes
+
+- name: Start and enable NGINX
+  systemd:
+    name: nginx
+    state: started
+    enabled: yes
+
+- name: Create NGINX configuration for Kubernetes ingress
+  copy:
+    content: |
+      upstream kubernetes-ingress {
+          server 127.0.0.1:80;
+      }
+      
+      server {
+          listen 80;
+          server_name _;
+          
+          location / {
+              proxy_pass http://kubernetes-ingress;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+      }
+    dest: /etc/nginx/sites-available/kubernetes-ingress
+
+- name: Enable NGINX site
+  file:
+    src: /etc/nginx/sites-available/kubernetes-ingress
+    dest: /etc/nginx/sites-enabled/kubernetes-ingress
+    state: link
+
+- name: Remove default NGINX site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+
+- name: Test NGINX configuration
+  shell: nginx -t
+  register: nginx_test
+  changed_when: false
+
+- name: Reload NGINX
+  systemd:
+    name: nginx
+    state: reloaded
+  when: nginx_test.rc == 0
+
+- name: Open firewall for HTTP
+  ufw:
+    rule: allow
+    port: '80'
+    proto: tcp
+
+- name: Open firewall for HTTPS
+  ufw:
+    rule: allow
+    port: '443'
+    proto: tcp

@@ -1,10 +1,36 @@
 ---
 all:
   children:
-    azure_hosts:  
+    # Kubernetes Control Plane + Jenkins + Ansible
+    k8s_control_plane:
       hosts:
-        test-install: # <- Name of server
-          ansible_host: 4.223.80.227  #  <- Server IP
-          ansible_user: azureuser     # Your SSH username
-          ansible_ssh_private_key_file: ~/.ssh/id_boostflow  # Path to SSH key
-          server_name: "{{ ansible_host }}"
+        vag-setup-vm:
+          ansible_host: 20.91.227.216
+          ansible_user: azureuser
+          ansible_ssh_private_key_file: ~/.ssh/id_boostflow
+          k8s_role: control-plane
+          jenkins_enabled: true
+          ansible_controller: true
+
+    # Kubernetes Worker Nodes
+    k8s_workers:
+      hosts:
+        vag-prod-vm:
+          ansible_host: 20.91.245.158
+          ansible_user: azureuser
+          ansible_ssh_private_key_file: ~/.ssh/id_boostflow
+          k8s_role: worker
+          nginx_enabled: true
+        vag-minio-vm:
+          ansible_host: 4.223.105.0
+          ansible_user: azureuser
+          ansible_ssh_private_key_file: ~/.ssh/id_boostflow
+          k8s_role: worker
+          minio_enabled: true
+
+    # Legacy groupings for compatibility
+    azure_hosts:
+      children:
+        - k8s_control_plane
+        - k8s_workers
+      
