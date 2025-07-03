@@ -3,7 +3,7 @@ all:
   children:
     azure_hosts:  
       hosts:
-        test-install: # <- Name of server
+        devops-vm: # <- Name of server
           ansible_host: 4.223.80.227  #  <- Server IP
           ansible_user: azureuser     # Your SSH username
           ansible_ssh_private_key_file: ~/.ssh/id_boostflow  # Path to SSH key
