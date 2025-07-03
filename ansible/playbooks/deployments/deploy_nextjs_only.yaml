@@ -61,23 +61,7 @@
       become_user: "{{ ansible_user }}"
       become: yes
 
-    - name: Remove existing repository if it exists with wrong permissions
-      file:
-        path: "{{ app_dir }}"
-        state: absent
-      become: yes
-      ignore_errors: yes
-
-    - name: Recreate Boostflow directory with correct ownership
-      file:
-        path: "{{ app_dir }}"
-        state: directory
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
-        mode: '0755'
-      become: yes
-
-    - name: Clone/Update Boostflow repository
+    - name: Check if repository exists and get current commit
       git:
         repo: "{{ app_repo }}"
         dest: "{{ app_dir }}"
@@ -87,6 +71,7 @@
         accept_hostkey: yes
       become_user: "{{ ansible_user }}"
       become: yes
+      register: git_result
 
     - name: Copy .env.local file to application directory
       copy:
@@ -107,15 +92,29 @@
         mode: '0644'
       become: yes
 
-    - name: Stop existing NextJS application and remove orphan containers
-      shell: docker compose down --remove-orphans || true
+    # Check if we need to rebuild (only if code changed)
+    - name: Check if Docker image exists
+      shell: docker images -q {{ app_name }}:{{ build_tag }}
+      register: image_exists
+      become: yes
+
+    - name: Stop existing NextJS application
+      shell: docker compose down || true
       args:
         chdir: "{{ app_dir }}"
       ignore_errors: yes
       become: yes
 
-    - name: Build and start NextJS application
-      shell: docker compose up -d --build nextjs
+    # Only rebuild if code changed or image doesn't exist
+    - name: Build NextJS application (only if needed)
+      shell: docker compose build nextjs
+      args:
+        chdir: "{{ app_dir }}"
+      become: yes
+      when: git_result.changed or image_exists.stdout == ""
+
+    - name: Start NextJS application
+      shell: docker compose up -d nextjs
       args:
         chdir: "{{ app_dir }}"
       become: yes
